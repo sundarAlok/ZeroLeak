@@ -56,12 +56,12 @@ export const ChatCard = ({ user, lastMessage, lastMessagePreview, timestamp, isA
         {/* Row 1: name (left) | time + menu (right) */}
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
           <div style={{ flex:1, minWidth:0 }}>
-            <h3 style={{ margin:0, fontSize:16, lineHeight:1, fontWeight: unreadCount > 0 ? 700 : 600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{getDisplayName(user)}</h3>
+            <h3 style={{ margin:0, fontSize:16, lineHeight:1.2, fontWeight: unreadCount > 0 ? 700 : 600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{getDisplayName(user)}</h3>
           </div>
 
           <div style={{ display:'flex', alignItems:'center', gap:8, marginLeft:12, flexShrink:0 }}>
             <div style={{ fontSize:12, color:'var(--text-secondary)', lineHeight:1 }}>{formatTime(timestamp)}</div>
-            <button onClick={(e)=>{ e.stopPropagation(); if (onMenuClick) onMenuClick(e); }} aria-label="Menu" style={{ background:'transparent', border:'none', padding:6, cursor:'pointer', color:'var(--text-secondary)', lineHeight:1 }}>
+            <button onClick={(e)=>{ e.stopPropagation(); if (onMenuClick) onMenuClick(e); }} aria-label="Menu" style={{ background:'transparent', border:'none', padding:6, cursor:'pointer', color:'var(--text-secondary)', lineHeight:0.5 }}>
               <FiMoreVertical size={16} />
             </button>
           </div>
@@ -70,7 +70,7 @@ export const ChatCard = ({ user, lastMessage, lastMessagePreview, timestamp, isA
         {/* Row 2: message preview (left) | pin (right) */}
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
           <div style={{ flex:1, minWidth:0 }}>
-            <p className="chat-card-message" style={{ margin:0, fontSize:12, color: unreadCount > 0 ? 'var(--text-primary)' : 'var(--text-secondary)', textAlign:'left', lineHeight:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{lastMessagePreview ? String(lastMessagePreview) : (lastMessage ? String(lastMessage) : 'No messages yet')}</p>
+            <p className="chat-card-message" style={{ margin:0, marginBottom:4 ,fontSize:12, color: unreadCount > 0 ? 'var(--text-primary)' : 'var(--text-secondary)', textAlign:'left', lineHeight:1.1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{lastMessagePreview ? String(lastMessagePreview) : (lastMessage ? String(lastMessage) : 'No messages yet')}</p>
           </div>
           <div style={{ marginLeft:10, flexShrink:0 }}>
             {pinned && <div style={{ color:'var(--primary)', fontSize:18, paddingRight:4 }} title="Pinned"><GrFormPin /></div>}

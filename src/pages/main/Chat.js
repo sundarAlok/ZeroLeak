@@ -145,7 +145,8 @@ const Chat = () => {
               const cachedMsgs = getCachedMessages(c.id);
               if (cachedMsgs && cachedMsgs.length > 0) {
                 const lm = cachedMsgs[cachedMsgs.length - 1];
-                const senderName = lm.senderId === user.uid ? 'You' : (lm.senderName || (cachedUserData && cachedUserData.name) || '');
+                // Use platform name (from cachedUserData) instead of senderName (Google account name)
+                const senderName = lm.senderId === user.uid ? 'You' : (cachedUserData && cachedUserData.name) || '';
                 const text = (lm.text || lm.message || '').toString();
                 lastMessagePreview = senderName ? `${senderName}: ${text}` : text;
                 lastMessage = lm.text || lm.message || lastMessage;

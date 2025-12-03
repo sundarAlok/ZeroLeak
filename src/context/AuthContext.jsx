@@ -2,6 +2,11 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, db } from '../firebase/firebase';
 import { GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
+import { 
+  storeUserCredentials, 
+  storeUserProfile,
+  clearAuthData 
+} from '../utils/storageManager';
 
 const AuthContext = createContext();
 
@@ -14,14 +19,24 @@ export const AuthProvider = ({ children }) => {
     const unsubscribe = auth.onAuthStateChanged(async (u) => {
       setUser(u);
       if (u) {
+        // User is authenticated - store credentials and fetch profile
+        storeUserCredentials(u);
+        
         try {
           const userDoc = await getDoc(doc(db, 'users', u.uid));
-          setOnboarded(userDoc.exists());
+          if (userDoc.exists()) {
+            setOnboarded(true);
+            // Store user profile data
+            storeUserProfile(u.uid, userDoc.data());
+          } else {
+            setOnboarded(false);
+          }
         } catch (err) {
           console.error('Error checking onboarding state:', err);
           setOnboarded(false);
         }
       } else {
+        // User is logged out
         setOnboarded(false);
       }
       setLoading(false);
@@ -31,12 +46,15 @@ export const AuthProvider = ({ children }) => {
 
   const signInWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
-    return signInWithPopup(auth, provider);
+    const result = await signInWithPopup(auth, provider);
+    // Credentials are stored automatically via onAuthStateChanged
+    return result;
   };
 
   const signOut = async () => {
     await firebaseSignOut(auth);
     setOnboarded(false);
+    clearAuthData();
   };
 
   const value = {
