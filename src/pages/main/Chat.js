@@ -44,6 +44,7 @@ const Chat = () => {
   // user metadata (favorites, per-user deleted convo timestamps)
   const [userMeta, setUserMeta] = useState({ favorites: [], deletedConversations: {} });
   const [favFilter, setFavFilter] = useState('');
+  const [activeTab, setActiveTab] = useState('chats');
 
   // Subscribe to current user's profile metadata (favorites / deletedConversations)
   useEffect(() => {
@@ -145,7 +146,8 @@ const Chat = () => {
             locked: data.locked || false,
             unreadCount: (data.unreadCounts?.[currentUid]) || 0,
             isGroup: !!data.isGroup,
-            groupName: data.groupName || null
+            groupName: data.groupName || null,
+            groupPhotoURL: data.groupPhotoURL || null
           });
         });
 
@@ -196,9 +198,13 @@ const Chat = () => {
 
           const isFavourite = (userMeta?.favorites || []).includes(c.otherUserId);
 
+          const userObj = c.isGroup
+            ? { id: c.groupId || c.id, name: c.groupName || 'Group', username: '', photoURL: c.groupPhotoURL || '' }
+            : (cachedUserData ? { id: c.otherUserId, ...cachedUserData } : { id: c.otherUserId, name: 'Loading...', username: '', photoURL: '' });
+
           return {
             id: c.id,
-            user: cachedUserData ? { id: c.otherUserId, ...cachedUserData } : { id: c.otherUserId, name: c.groupName || 'Loading...', username: '', photoURL: '' },
+            user: userObj,
             lastMessage,
             lastMessagePreview,
             timestamp: c.timestamp,
@@ -507,7 +513,9 @@ const Chat = () => {
         pinned: meta.pinned || convo.pinned || false,
         blockedBy: meta.blockedBy || convo.blockedBy || null,
         locked: meta.locked || convo.locked || false,
-        lockSalt: meta.lockSalt || convo.lockSalt || null
+        lockSalt: meta.lockSalt || convo.lockSalt || null,
+        isGroup: meta.isGroup || false,
+        participants: meta.participants || []
       };
 
       setActiveConvo(prev => (prev && prev.id === built.id) ? prev : built);
@@ -920,6 +928,13 @@ const Chat = () => {
   // Helper to get convo from state
   const getConvoFromState = (convoId) => conversations.find(c => c.id === convoId);
 
+  // Filter conversations based on active tab
+  const filteredConversations = conversations.filter(convo => {
+    if (activeTab === 'chats') return !convo.isGroup;
+    if (activeTab === 'groups') return convo.isGroup;
+    return true;
+  });
+
   return (
     <div ref={resizeRef} style={{ display:'flex', height:'calc(100vh - 80px)', background:'var(--app-bg)' }}>
       {/* Sidebar */}
@@ -949,6 +964,42 @@ const Chat = () => {
             <div style={{ paddingTop:1 }}>
               <SearchBar value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Search users or usernames" />
             </div>
+
+            {/* Tabs for Chats and Groups */}
+            <div style={{ display:'flex', gap:4, padding:'8px 0' }}>
+              <button
+                onClick={() => setActiveTab('chats')}
+                style={{
+                  flex:1,
+                  padding:'8px 12px',
+                  borderRadius:8,
+                  border:'none',
+                  background: activeTab === 'chats' ? 'var(--primary)' : 'var(--bg)',
+                  color: activeTab === 'chats' ? '#fff' : 'var(--text-primary)',
+                  fontWeight:600,
+                  cursor:'pointer',
+                  transition:'all 0.2s'
+                }}
+              >
+                Chats
+              </button>
+              <button
+                onClick={() => setActiveTab('groups')}
+                style={{
+                  flex:1,
+                  padding:'8px 12px',
+                  borderRadius:8,
+                  border:'none',
+                  background: activeTab === 'groups' ? 'var(--primary)' : 'var(--bg)',
+                  color: activeTab === 'groups' ? '#fff' : 'var(--text-primary)',
+                  fontWeight:600,
+                  cursor:'pointer',
+                  transition:'all 0.2s'
+                }}
+              >
+                Groups
+              </button>
+            </div>
           </div>
 
           <div style={{ flex:1, overflowY:'auto', padding:8 }}>
@@ -964,7 +1015,7 @@ const Chat = () => {
               {searchQuery && searchResults.length === 0 && !loading && <div style={{ padding:20, textAlign:'center', color:'var(--text-secondary)' }}>No users found</div>}
 
               {(!searchQuery || searchResults.length === 0) && (
-                conversations.length > 0 ? conversations.map(convo => (
+                filteredConversations.length > 0 ? filteredConversations.map(convo => (
                   <div key={convo.id} style={{ cursor:'pointer', position:'relative' }}>
                     <ChatCard user={convo.user} lastMessage={convo.lastMessage} lastMessagePreview={convo.lastMessagePreview} timestamp={convo.timestamp} isActive={activeConvo?.id === convo.id} onCardClick={() => handleCardClick(convo)} onMenuClick={(e) => { e.stopPropagation(); setMenuState({ open:true, x:e.clientX, y:e.clientY, convoId: convo.id }); }} unreadCount={convo.unreadCount} participantCount={convo.participantCount} pinned={convo.pinned} />
                   </div>
@@ -993,7 +1044,7 @@ const Chat = () => {
         />
       )}
 
-      <GroupModal open={groupOpen} onClose={()=>setGroupOpen(false)} currentUser={user} />
+      <GroupModal open={groupOpen} onClose={()=>setGroupOpen(false)} currentUser={user} onGroupCreated={() => setActiveTab('groups')} />
 
       {menuState.open && (() => {
         const currentConvo = getConvoFromState(menuState.convoId);
@@ -1038,10 +1089,11 @@ const Chat = () => {
                   const otherId = activeConvo?.user?.id;
                   const readByOther = otherId && msg.readBy && msg.readBy.includes(otherId);
                   const deliveredToOther = otherId && msg.deliveredTo && msg.deliveredTo.includes(otherId);
+                  const displayText = activeConvo.isGroup ? (isOwn ? `You: ${msg.text}` : `${getCachedUser(msg.senderId)?.name || msg.senderName || 'Unknown'}: ${msg.text}`) : msg.text;
                   return (
                     <div key={msg.id || idx} style={{ display:'flex', justifyContent: isOwn ? 'flex-end' : 'flex-start', marginBottom:8 }}>
                       <div style={{ background: isOwn ? 'linear-gradient(120deg,var(--primary),var(--accent))' : 'var(--bg)', color: isOwn ? '#fff' : 'var(--text-primary)', padding:'10px 14px', borderRadius:12, maxWidth:'60%', wordWrap:'break-word', fontSize:14, position:'relative', boxShadow:'var(--shadow-sm)' }}>
-                        <div>{msg.text}</div>
+                        <div>{displayText}</div>
                         <div className="message-meta-row" style={{ marginTop:8, justifyContent:'flex-end' }}>
                           <div className="msg-time">{(() => {
                             if (!msg.timestamp) return '';

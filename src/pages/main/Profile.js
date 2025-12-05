@@ -20,6 +20,7 @@ const Profile = () => {
   const [success, setSuccess] = useState('');
   const [conversationCount, setConversationCount] = useState(0);
   const [momentCount, setMomentCount] = useState(0);
+  const [groupCount, setGroupCount] = useState(0);
 
   useEffect(() => {
     if (!user) return;
@@ -61,14 +62,17 @@ const Profile = () => {
           setProfile(profileData);
           setEditData(profileData);
         }
-        
+
         // Cache the profile for next load
         cacheUserProfile(user.uid, profileData);
-        
-        // Set counts immediately
-        setConversationCount(convoSnap.size);
+
+        // Set counts immediately, separating groups from conversations
+        const nonGroupConvos = convoSnap.docs.filter(doc => !doc.data().isGroup);
+        const groupConvos = convoSnap.docs.filter(doc => doc.data().isGroup);
+        setConversationCount(nonGroupConvos.length);
         setMomentCount(momentSnap.size);
-        
+        setGroupCount(groupConvos.length);
+
         setLoading(false);
       } catch (err) {
         console.error('Error fetching profile:', err);
@@ -164,7 +168,7 @@ const Profile = () => {
         )}
 
         {!isEditing && (
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
             <div style={{ background:'var(--card-bg)', borderRadius:12, padding:16, textAlign:'center', boxShadow:'var(--shadow-sm)' }}>
               <div style={{ fontSize:24, fontWeight:700, color:'var(--primary)' }}>{conversationCount}</div>
               <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:4 }}>Conversations</div>
@@ -172,6 +176,10 @@ const Profile = () => {
             <div style={{ background:'var(--card-bg)', borderRadius:12, padding:16, textAlign:'center', boxShadow:'var(--shadow-sm)' }}>
               <div style={{ fontSize:24, fontWeight:700, color:'var(--accent)' }}>{momentCount}</div>
               <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:4 }}>Moments</div>
+            </div>
+            <div style={{ background:'var(--card-bg)', borderRadius:12, padding:16, textAlign:'center', boxShadow:'var(--shadow-sm)' }}>
+              <div style={{ fontSize:24, fontWeight:700, color:'var(--text-primary)' }}>{groupCount}</div>
+              <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:4 }}>Groups</div>
             </div>
           </div>
         )}
