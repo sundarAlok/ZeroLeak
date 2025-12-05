@@ -1,0 +1,127 @@
+/* ----------------------------- */
+/* Layout containers */
+/* ----------------------------- */
+.layout-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.layout-content {
+  flex: 1;
+}
+
+/* ----------------------------- */
+/* Bottom navigation */
+/* ----------------------------- */
+.bottom-nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 50;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+/* Full-width inner container with flex */
+.bottom-nav-inner {
+  width: 100%;                  /* full width */
+  display: flex;
+  align-items: center;
+  justify-content: space-between; /* space between center and right icons */
+  gap: 16px;                     /* optional gap between groups */
+}
+
+/* Center tabs container */
+.nav-center {
+  display: flex;
+  flex: 1;                        /* take available space */
+  justify-content: center;         /* center tabs horizontally */
+  gap: 4px;                        /* spacing between center tabs */
+  margin: 0 150px;                  /* margin on left and right */
+}
+
+/* Right side icons/actions */
+.nav-actions {
+  display: flex;
+  gap: 12px;                       /* spacing between icons */
+  margin-left: auto;                /* push to far right */
+}
+
+/* ----------------------------- */
+/* Tab items (center + right) */
+/* ----------------------------- */
+.zl-tab-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;                        /* vertical gap between icon and label */
+  padding: 8px 8px;                /* clickable area */
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.zl-tab-item:hover {
+  background: var(--hover);
+}
+
+.zl-tab-item.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.zl-tab-icon {
+  font-size: 20px;
+}
+
+.zl-tab-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Make center tabs equal width */
+.nav-center .zl-tab-item {
+  flex: 1;
+  justify-content: center;
+  padding-left: 6px;
+  padding-right: 6px;
+  min-width: 0;
+  text-align: center;
+}
+
+/* Right side buttons (Favorites & Theme) */
+.nav-actions .zl-tab-item,
+.nav-actions button.zl-tab-item {
+  padding: 8px 14px;
+  border: 1px solid #b8b8b8;
+  border-radius: 10px;
+  background: transparent;
+  gap: 4px;
+}
+
+/* Hover effect for right-side buttons (Favorites & Theme) */
+.nav-actions .zl-tab-item:hover,
+.nav-actions button.zl-tab-item:hover {
+  background: var(--nav-action-hover-bg);
+  border: 1px solid #9c9c9c;
+}
+
+
+
+/* ----------------------------- */
+/* Soft background for active tab */
+/* ----------------------------- */
+:root {
+  --primary-soft: rgba(99, 102, 241, 0.15);
+  --nav-action-hover-bg: rgb(247, 247, 247); /* light theme */
+}
+
+[data-theme="dark"] {
+  --primary-soft: rgba(99, 102, 241, 0.25);
+  --nav-action-hover-bg: rgba(0, 0, 0, 0.397); /* dark theme */
+}

@@ -5,6 +5,9 @@ import { doc, updateDoc, getDoc, getDocs, query, where, collection } from 'fireb
 import { db } from '../../firebase/firebase';
 import '../../components/styles/common.css';
 import { getCachedUserProfile, cacheUserProfile } from '../../utils/cacheManager';
+import { MdLogout } from "react-icons/md";
+import { LiaEdit } from "react-icons/lia";
+import { BsSave2 } from "react-icons/bs";
 
 const Profile = () => {
   const { user, signOut } = useAuth();
@@ -116,8 +119,18 @@ const Profile = () => {
           {!isEditing && <>
             <p style={{ fontSize:14, color:'var(--text-primary)', margin:'12px 0 0 0', lineHeight:1.5 }}>{profile.bio || 'Hey there — I am using ZeroLeak!'}</p>
             <div style={{ display:'flex', gap:8, marginTop:20 }}>
-              <button onClick={()=>setIsEditing(true)} className="btn-primary" style={{ flex:1 }}>✏️ Edit Profile</button>
-              <button onClick={()=>{ if(window.confirm('Sign out?')) signOut(); }} className="btn-secondary" style={{ flex:1 }}>🚪 Sign Out</button>
+              <button 
+                onClick={()=>setIsEditing(true)} 
+                className="btn-primary" 
+                style={{ flex: 1}}> <LiaEdit size={22} /> Edit Profile
+              </button>
+              <button 
+                onClick={() => { if(window.confirm('Sign out?')) signOut(); }} 
+                className="btn-primary" 
+                style={{ flex: 1}} >
+                <MdLogout size={20}/> Sign Out
+              </button>
+
             </div>
           </>}
 
@@ -143,8 +156,8 @@ const Profile = () => {
               </div>
 
               <div style={{ display:'flex', gap:8 }}>
-                <button className="btn-primary" type="submit" disabled={saving} style={{ flex:1 }}>{saving ? 'Saving...' : '💾 Save Changes'}</button>
-                <button type="button" className="btn-secondary" onClick={()=>{ setIsEditing(false); setEditData(profile); }} style={{ flex:1 }}>✕ Cancel</button>
+                <button className="btn-primary" type="submit" disabled={saving} style={{ flex:1 }}>{saving ? 'Saving...' : <> <BsSave2 size={20} /> Save Changes </>}</button>
+                <button type="button" className="btn-primary" onClick={()=>{ setIsEditing(false); setEditData(profile); }} style={{ flex:1 }}>✕ Cancel</button>
               </div>
             </form>
           </div>

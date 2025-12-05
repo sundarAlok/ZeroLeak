@@ -77,7 +77,7 @@ const Favorites = () => {
     <div style={{ padding: 20 }}>
       <h2 style={{ marginTop:0 }}>Favorites</h2>
       <div style={{ margin: '12px 0' }}>
-        <input placeholder="Search favorites" value={filter} onChange={(e)=>setFilter(e.target.value)} style={{ width:'100%', padding:10, borderRadius:8, border:'1px solid var(--border)' }} />
+        <input placeholder="Search favorites" value={filter} onChange={(e)=>setFilter(e.target.value)} className='search-input' />
       </div>
       {loading ? <div>Loading...</div> : (
         <div style={{ display:'flex', flexDirection:'column', gap:8, padding:8, borderRadius:8, background:'var(--card-bg)', boxShadow:'var(--shadow-sm)', border:'1px solid var(--border)' }}>

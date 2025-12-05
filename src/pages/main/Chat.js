@@ -73,7 +73,7 @@ const Chat = () => {
 
   // compute max allowed side panel width (1/3 of viewport) to ensure chat area remains visible
   const getMaxSideWidth = () => {
-    try { return Math.floor((window.innerWidth || 1200) * 0.3333); } catch { return 480; }
+    try { return Math.floor((window.innerWidth || 1200) * 0.45); } catch { return 480; }
   };
 
   // conversations listener - OPTIMIZED: Load from cache FIRST, then sync
@@ -83,7 +83,34 @@ const Chat = () => {
     // STEP 1: Load from cache immediately (instant UI)
     const cachedConvos = getCachedConversations();
     if (cachedConvos && cachedConvos.length > 0) {
-      setConversations(cachedConvos);
+      // Recompute previews using current user's UID and cached messages so previews remain correct
+      try {
+        const currentUid = user.uid;
+        const adjusted = cachedConvos.map(c => {
+          let lastMessagePreview = c.lastMessagePreview || c.lastMessage || '';
+          try {
+            const cachedMsgs = getCachedMessages(c.id);
+            if (cachedMsgs && cachedMsgs.length > 0) {
+              const lm = cachedMsgs[cachedMsgs.length - 1];
+              let senderName = '';
+              if (lm.senderId === currentUid) {
+                senderName = 'You';
+              } else {
+                // Try to resolve sender's platform name from cache (prefer exact senderId)
+                const senderCached = getCachedUser(lm.senderId) || getCachedUser(c.otherUserId) || {};
+                senderName = senderCached.name || (lm.senderName || '');
+              }
+              const text = (lm.text || lm.message || '').toString();
+              // For 1-on-1 chats we show only the message text; for groups include sender prefix
+              lastMessagePreview = c.isGroup ? (senderName ? `${senderName}: ${text}` : text) : text;
+            }
+          } catch (e) { /* ignore */ }
+          return { ...c, lastMessagePreview };
+        });
+        setConversations(adjusted);
+      } catch (e) {
+        setConversations(cachedConvos);
+      }
       setLoading(false);
     } else {
       setLoading(true);
@@ -101,10 +128,11 @@ const Chat = () => {
       try {
         const basicConvos = [];
         const otherIds = new Set();
+        const currentUid = user.uid; // Capture current user's UID
         
         snapshot.docs.forEach(d => {
           const data = d.data();
-          const otherId = data.participants?.find(id => id !== user.uid) || null;
+          const otherId = data.participants?.find(id => id !== currentUid) || null;
           if (otherId) otherIds.add(otherId);
           
           basicConvos.push({
@@ -115,7 +143,7 @@ const Chat = () => {
             timestamp: data.lastMessageTime,
             pinned: data.pinned || false,
             locked: data.locked || false,
-            unreadCount: (data.unreadCounts?.[user.uid]) || 0,
+            unreadCount: (data.unreadCounts?.[currentUid]) || 0,
             isGroup: !!data.isGroup,
             groupName: data.groupName || null
           });
@@ -145,10 +173,18 @@ const Chat = () => {
               const cachedMsgs = getCachedMessages(c.id);
               if (cachedMsgs && cachedMsgs.length > 0) {
                 const lm = cachedMsgs[cachedMsgs.length - 1];
-                // Use platform name (from cachedUserData) instead of senderName (Google account name)
-                const senderName = lm.senderId === user.uid ? 'You' : (cachedUserData && cachedUserData.name) || '';
+                // SIMPLE LOGIC: Check if CURRENT user sent this message
+                let senderName = '';
+                if (lm.senderId === currentUid) {
+                  // Current user sent this message
+                  senderName = 'You';
+                } else {
+                  // Other participant sent this message - use their platform name
+                  senderName = (cachedUserData && cachedUserData.name) || '';
+                }
                 const text = (lm.text || lm.message || '').toString();
-                lastMessagePreview = senderName ? `${senderName}: ${text}` : text;
+                // For 1-on-1 chats we show only the message text; for groups include sender prefix
+                lastMessagePreview = c.isGroup ? (senderName ? `${senderName}: ${text}` : text) : text;
                 lastMessage = lm.text || lm.message || lastMessage;
               }
             } else {
@@ -208,12 +244,39 @@ const Chat = () => {
             const userMap = new Map();
             results.forEach(r => { if (r && r.data) userMap.set(r.id, r.data); });
             
-            // Update conversations with fresh user data
-            setConversations(prev => prev.map(c => 
-              userMap.has(c.user.id) 
-                ? { ...c, user: { id: c.user.id, ...userMap.get(c.user.id) } }
-                : c
-            ));
+            // Update conversations with fresh user data and rebuild previews
+            setConversations(prev => prev.map(c => {
+              if (!userMap.has(c.user.id)) return c;
+              
+              // Get fresh user data
+              const freshUserData = userMap.get(c.user.id);
+              
+              // Rebuild message preview with fresh data
+              let lastMessagePreview = c.lastMessagePreview;
+              try {
+                const cachedMsgs = getCachedMessages(c.id);
+                if (cachedMsgs && cachedMsgs.length > 0) {
+                  const lm = cachedMsgs[cachedMsgs.length - 1];
+                  let senderName = '';
+                  if (lm.senderId === user.uid) {
+                    // Current user sent this message
+                    senderName = 'You';
+                  } else {
+                    // Other participant sent this message
+                    senderName = freshUserData.name || '';
+                  }
+                  const text = (lm.text || lm.message || '').toString();
+                  // For 1-on-1 chats we show only the message text; for groups include sender prefix
+                  lastMessagePreview = c.isGroup ? (senderName ? `${senderName}: ${text}` : text) : text;
+                }
+              } catch (e) { /* ignore */ }
+              
+              return { 
+                ...c, 
+                user: { id: c.user.id, ...freshUserData },
+                lastMessagePreview
+              };
+            }));
           }).catch(err => console.error('Error fetching user docs:', err));
         }
 
@@ -861,13 +924,13 @@ const Chat = () => {
     <div ref={resizeRef} style={{ display:'flex', height:'calc(100vh - 80px)', background:'var(--app-bg)' }}>
       {/* Sidebar */}
       {showSidebar && (
-        <div style={{ width: Math.min(sidebarWidth, getMaxSideWidth()), maxWidth: '33.333vw', background:'var(--card-bg)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ width: Math.min(sidebarWidth, getMaxSideWidth()), maxWidth: '30vw', background:'var(--card-bg)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
           <div style={{ padding:12, display:'flex', flexDirection:'column', gap:8 }}>
             <div style={{ display:'flex', alignItems:'center', gap:12 }}>
               <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                <img src="/splash_screen/logo.png" alt="ZeroLeak" style={{ height:36 }} />
-                <div style={{ display:'flex', flexDirection:'column' }}>
-                  <div style={{ fontWeight:800, color:'var(--primary)', fontSize:18 }}>ZeroLeak</div>
+                {/* <img src="/splash_screen/logo.png" alt="ZeroLeak" style={{ height:30 }} /> */}
+                <div style={{ display:'flex', flexDirection:'column', marginTop: -4 }}>
+                  <div style={{ fontWeight:700, color:'var(--primary)', fontSize:21, fontFamily:`'Segoe UI', 'Helvetica Neue', Arial, sans-serif`, fontStyle:'italic', letterSpacing:0.2, textShadow:'0 1px 0 rgba(0,0,0,0.04)', paddingLeft:2 }}>ZeroLeak</div>
                 </div>
               </div>
 
@@ -877,13 +940,13 @@ const Chat = () => {
                     <FiMenu size={20} />
                   </button>
                 )}
-                <button title="Create group" onClick={() => setGroupOpen(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize:20 }}>
-                  <HiOutlineUserGroup size={20} />
+                <button title="Create group" onClick={() => setGroupOpen(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize:24, marginTop:7}}>
+                  <HiOutlineUserGroup size={24} />
                 </button>
               </div>
             </div>
 
-            <div style={{ paddingTop:4 }}>
+            <div style={{ paddingTop:1 }}>
               <SearchBar value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Search users or usernames" />
             </div>
           </div>
@@ -1007,9 +1070,11 @@ const Chat = () => {
         ) : (
           <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-secondary)', textAlign:'center' }}>
             <div>
-              <div style={{ fontSize:48, marginBottom:16 }}><FiMessageCircle size={48} /></div>
-              <h2 style={{ fontSize:18, fontWeight:600, margin:'0 0 8px 0' }}>Start a conversation</h2>
-              <p style={{ fontSize:14, margin:0 }}>Search for users or select from your conversations</p>
+              <div style={{ fontSize:48, marginBottom:12 }}>
+                <img src="/splash_screen/logo.png" alt="ZeroLeak" style={{ height:100 }} />
+              </div>
+              <h2 style={{ fontSize:19, fontWeight:600, margin:'0 0 8px 0' }}>Start a conversation</h2>
+              <p style={{ fontSize:16, margin:0 }}>Search for users or select from your conversations</p>
             </div>
           </div>
         )}

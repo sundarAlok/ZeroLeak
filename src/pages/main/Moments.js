@@ -1,160 +1,446 @@
 // Moments.js
-import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
+import React, { useEffect, useState, useRef } from 'react';
+import {
+  collection, query, orderBy, limit, onSnapshot,
+  addDoc, updateDoc, doc, deleteDoc, serverTimestamp, getDoc
+} from 'firebase/firestore';
 import { db, auth } from '../../firebase/firebase';
-import { MomentCard } from '../../components/common/PremiumCards';
 import '../../components/styles/common.css';
+import '../../components/styles/Moments.css';
+
+import {
+  RiMore2Fill,
+  RiGeminiFill,
+  RiTimeFill,
+  RiEditFill,
+  RiDeleteBin6Fill
+} from 'react-icons/ri';
+import { RxCross2, RxCheckCircled } from "react-icons/rx";
+
 import { getCachedMoments, cacheMoments } from '../../utils/cacheManager';
 
-const Moments = () => {
+const SAFE_FONTS = [
+  { label: 'System UI (default)', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial' },
+  { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
+  { label: 'Helvetica', value: 'Helvetica, Arial, sans-serif' },
+  { label: 'Verdana', value: 'Verdana, Geneva, sans-serif' },
+  { label: 'Tahoma', value: 'Tahoma, Geneva, sans-serif' },
+  { label: 'Trebuchet MS', value: '"Trebuchet MS", Arial, sans-serif' },
+  { label: 'Georgia', value: 'Georgia, serif' },
+  { label: 'Times New Roman', value: '"Times New Roman", Times, serif' },
+  { label: 'Courier New', value: '"Courier New", Courier, monospace' },
+  { label: 'Brush Script MT', value: '"Brush Script MT", cursive' }
+];
+
+export default function Moments() {
   const [moments, setMoments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+
   const [text, setText] = useState('');
   const [imageUrl, setImageUrl] = useState('');
-  const [bgColor, setBgColor] = useState('#6366f1');
+  const [bgColor, setBgColor] = useState('#6366F1');
   const [textColor, setTextColor] = useState('#ffffff');
-  const [submitting, setSubmitting] = useState(false);
+  const [fontSize, setFontSize] = useState(18);
+  const [fontFamily, setFontFamily] = useState(SAFE_FONTS[0].value);
+
+  const [, setSubmitting] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+
+  const [openMenuFor, setOpenMenuFor] = useState(null);
   const user = auth.currentUser;
 
+  // User profile cache + subscriptions
+  const [userProfiles, setUserProfiles] = useState({});
+  const userProfilesRef = useRef({});
+
+  const outsideClickRef = useRef(null);
+
+  // -----------------------------
+  // Load Moments
+  // -----------------------------
   useEffect(() => {
-    // Load from cache immediately
-    const cachedMoments = getCachedMoments();
-    if (cachedMoments && cachedMoments.length > 0) {
-      setMoments(cachedMoments);
+    const cached = getCachedMoments();
+    if (cached) {
+      setMoments(cached);
       setLoading(false);
     }
 
-    // Real-time listener for latest moments (limited to 100)
-    const q = query(collection(db, 'moments'), orderBy('createdAt', 'desc'), limit(100));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-      setMoments(data);
-      cacheMoments(data); // Cache for next load
+    const q = query(collection(db, 'moments'), orderBy('createdAt', 'desc'), limit(200));
+    const unsub = onSnapshot(q, (snap) => {
+      const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setMoments(arr);
+      cacheMoments(arr);
       setLoading(false);
-    }, (err) => { console.error('Error fetching moments:', err); setLoading(false); });
 
-    return () => unsub();
+      const unique = [...new Set(arr.map(m => m.userId))];
+      ensureProfileSubscriptions(unique);
+    });
+
+    return () => {
+      unsub();
+      cleanupProfileSubscriptions();
+    };
   }, []);
 
+  // -----------------------------
+  // Profile Subscriptions
+  // -----------------------------
+  const ensureProfileSubscriptions = async (uids) => {
+    for (const uid of uids) {
+      if (userProfilesRef.current[uid]) continue;
+      try {
+        const userRef = doc(db, 'users', uid);
+        const unsubUser = onSnapshot(userRef, (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            userProfilesRef.current[uid] = {
+              ...userProfilesRef.current[uid],
+              ...data,
+              unsubscribe: unsubUser
+            };
+            setUserProfiles(prev => ({ ...prev, [uid]: { name: data.name, photoURL: data.photoURL || null } }));
+          }
+        });
+      } catch (err) {
+        console.error('Profile subscription error:', err);
+      }
+    }
+
+    Object.keys(userProfilesRef.current).forEach(uid => {
+      if (!uids.includes(uid)) {
+        userProfilesRef.current[uid]?.unsubscribe?.();
+        delete userProfilesRef.current[uid];
+      }
+    });
+  };
+
+  const cleanupProfileSubscriptions = () => {
+    Object.values(userProfilesRef.current).forEach(p => p?.unsubscribe?.());
+    userProfilesRef.current = {};
+  };
+
+  // -----------------------------
+  // Helpers
+  // -----------------------------
+  const isVisible = (m) => {
+    if (!m.createdAt) return true;
+    const created = m.createdAt.toDate ? m.createdAt.toDate() : new Date(m.createdAt);
+    const expiryDays = m.expiryDays ?? 1;
+    const expireAt = new Date(created.getTime() + expiryDays * 86400000);
+    return new Date() <= expireAt;
+  };
+
+  const visibleMoments = moments.filter(isVisible);
+
+  const formatTime = (timestamp) => {
+    if (!timestamp) return '';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const diffMs = Date.now() - date.getTime();
+    const mins = Math.floor(diffMs / 60000);
+    const hrs = Math.floor(diffMs / 3600000);
+    const days = Math.floor(diffMs / 86400000);
+    if (mins < 1) return 'now';
+    if (mins < 60) return `${mins}m ago`;
+    if (hrs < 24) return `${hrs}h ago`;
+    if (days < 7) return `${days}d ago`;
+    return date.toLocaleDateString();
+  };
+
+  // -----------------------------
+  // Form Submit
+  // -----------------------------
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!user) { alert('Please sign in first'); return; }
-    if (!text.trim() && !imageUrl.trim()) { alert('Please enter text or image URL'); return; }
+    if (!user) return alert('Sign in first');
+    if (!text.trim() && !imageUrl.trim()) return alert('Add text or image');
+
+    setSubmitting(true);
+
+    const body = {
+      userId: user.uid,
+      text: text.trim(),
+      imageUrl: imageUrl.trim(),
+      backgroundColor: bgColor,
+      textColor,
+      fontSize: Number(fontSize),
+      fontFamily
+    };
+
     try {
-      setSubmitting(true);
-      await addDoc(collection(db, 'moments'), {
-        userId: user.uid,
-        userEmail: user.email,
-        userName: user.displayName || 'User',
-        userPhoto: user.photoURL || null,
-        text: text.trim(),
-        imageUrl: imageUrl.trim(),
-        backgroundColor: bgColor,
-        textColor: textColor,
-        createdAt: serverTimestamp()
-      });
-      setText(''); setImageUrl(''); setBgColor('#6366f1'); setTextColor('#ffffff'); setShowForm(false);
+      if (editingId) {
+        await updateDoc(doc(db, 'moments', editingId), body);
+        setEditingId(null);
+      } else {
+        await addDoc(collection(db, 'moments'), {
+          ...body,
+          expiryDays: 1,
+          createdAt: serverTimestamp()
+        });
+      }
+
+      setText('');
+      setImageUrl('');
+      setBgColor('#6366F1');
+      setTextColor('#ffffff');
+      setFontSize(18);
+      setFontFamily(SAFE_FONTS[0].value);
+      setShowForm(false);
     } catch (err) {
-      console.error('Error creating moment:', err);
-      alert('Failed to create moment.');
+      console.error(err);
+      alert('Failed to save');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const deleteMoment = async (momentId) => {
-    if (!window.confirm('Delete this moment?')) return;
-    try { await deleteDoc(doc(db, 'moments', momentId)); } catch (err) { console.error('Error deleting moment:', err); alert('Failed to delete moment'); }
+  // Edit
+  const openEdit = async (m) => {
+    const snap = await getDoc(doc(db, 'moments', m.id));
+    const data = snap.exists() ? snap.data() : m;
+    setEditingId(m.id);
+    setText(data.text || '');
+    setImageUrl(data.imageUrl || '');
+    setBgColor(data.backgroundColor || '#6366F1');
+    setTextColor(data.textColor || '#ffffff');
+    setFontSize(data.fontSize ?? 18);
+    setFontFamily(data.fontFamily || SAFE_FONTS[0].value);
+    setShowForm(true);
   };
 
-  const formatTime = (timestamp) => {
-    if (!timestamp) return '';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-    if (diffMins < 1) return 'now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
+  const addMoreDay = async (m) => {
+    const ref = doc(db, 'moments', m.id);
+    const next = (m.expiryDays ?? 1) + 1;
+    await updateDoc(ref, { expiryDays: next });
+    setOpenMenuFor(null);
   };
 
+  const handleDelete = async (id) => {
+    if (window.confirm('Remove this?')) {
+      await deleteDoc(doc(db, 'moments', id));
+      setOpenMenuFor(null);
+    }
+  };
+
+  // -----------------------------
+  // Click Outside to Close Menu
+  // -----------------------------
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (!outsideClickRef.current) return;
+      if (!outsideClickRef.current.contains(e.target)) {
+        setOpenMenuFor(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // -----------------------------
+  // Rendering
+  // -----------------------------
   return (
-    <div style={{ display:'flex', flexDirection:'column', height:'calc(100vh - 80px)', background:'var(--app-bg)', overflowY:'auto' }}>
-      <div style={{ padding:'16px', maxWidth:760, margin:'0 auto', width:'100%' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24 }}>
-        <h1 style={{ fontSize:24, fontWeight:700, margin:0 }}>Moments</h1>
-        <button onClick={()=>setShowForm(s=>!s)} style={{ padding:'10px 18px', background:'var(--primary)', color:'#fff', border:'none', borderRadius:20, cursor:'pointer', fontWeight:600 }}>✨ {showForm ? 'Close' : 'Add Moment'}</button>
-      </div>
+    <div className="moments-page-root" ref={outsideClickRef}>
+      <div className="moments-container">
 
-      {showForm && (
-        <form onSubmit={handleSubmit} style={{ background:'var(--card-bg)', padding:20, borderRadius:12, marginBottom:24, boxShadow:'var(--shadow)' }}>
-          <div style={{ marginBottom:16 }}>
-            <label className="form-label">Text</label>
-            <textarea value={text} onChange={(e)=>setText(e.target.value)} placeholder="What's on your mind?" style={{ width:'100%', minHeight:100, padding:12, border:'1px solid var(--border)', borderRadius:8, background:'var(--input-bg)', color:'var(--text-primary)' }} />
-          </div>
-
-          <div style={{ marginBottom:16 }}>
-            <label className="form-label">Image URL (Optional)</label>
-            <input type="url" value={imageUrl} onChange={(e)=>setImageUrl(e.target.value)} placeholder="https://example.com/image.jpg" className="form-input" />
-          </div>
-
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
-            <div>
-              <label className="form-label">Background</label>
-              <input type="color" value={bgColor} onChange={(e)=>setBgColor(e.target.value)} style={{ width:'100%', height:40, border:'1px solid var(--border)', borderRadius:8 }} />
-            </div>
-            <div>
-              <label className="form-label">Text Color</label>
-              <input type="color" value={textColor} onChange={(e)=>setTextColor(e.target.value)} style={{ width:'100%', height:40, border:'1px solid var(--border)', borderRadius:8 }} />
-            </div>
-          </div>
-
-          {(text.trim() || imageUrl.trim()) && (
-            <div style={{ marginBottom:16 }}>
-              <p style={{ fontSize:12, fontWeight:600, color:'var(--text-secondary)', marginBottom:8 }}>Preview</p>
-              <MomentCard text={text} imageUrl={imageUrl} backgroundColor={bgColor} textColor={textColor} userName={user?.displayName || 'You'} userPhoto={user?.photoURL} timestamp={new Date()} />
-            </div>
-          )}
-
-          <div style={{ display:'flex', gap:8 }}>
-            <button type="submit" disabled={submitting || (!text.trim() && !imageUrl.trim())} style={{ flex:1, padding:12, background: submitting || (!text.trim() && !imageUrl.trim()) ? 'var(--border)' : 'var(--primary)', color:'#fff', border:'none', borderRadius:8, fontWeight:600 }}>{submitting ? 'Posting...' : 'Post Moment'}</button>
-            <button type="button" onClick={()=>setShowForm(false)} style={{ flex:1, padding:12, background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:8, fontWeight:600 }}>Cancel</button>
-          </div>
-        </form>
-      )}
-
-      {loading ? (<div style={{ textAlign:'center', padding:40, color:'var(--text-secondary)' }}>Loading moments...</div>) : moments.length === 0 ? (
-        <div style={{ textAlign:'center', padding:40, color:'var(--text-secondary)' }}>
-          <div style={{ fontSize:40, marginBottom:12 }}>✨</div>
-          <p style={{ fontWeight:500, fontSize:16 }}>No moments yet</p>
-          <p style={{ fontSize:13 }}>Share your first moment with everyone!</p>
+        {/* HEADER */}
+        <div className="moments-header">
+          <h1>Moments</h1>
+          <button
+            className="btn-primary"
+            onClick={() => {
+              if (!showForm) {
+                setEditingId(null);
+                setText('');
+                setImageUrl('');
+                setBgColor('#6366F1');
+                setTextColor('#ffffff');
+                setFontSize(18);
+                setFontFamily(SAFE_FONTS[0].value);
+              }
+              setShowForm(s => !s);
+            }}
+          >
+            <RiGeminiFill size={20} style={{ marginRight: 7 }} />
+            {showForm ? 'Close' : 'Add Moment'}
+          </button>
         </div>
-      ) : (
-        <div>
-          {moments.map(moment => (
-            <div key={moment.id} style={{ marginBottom:20 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
-                {moment.userPhoto ? <img src={moment.userPhoto} alt="" style={{ width:40, height:40, borderRadius:'50%', objectFit:'cover' }} onError={(e)=>{ e.currentTarget.onerror=null; e.currentTarget.src='/splash_screen/avatar_fallback.png'; }} /> : <div style={{ width:40, height:40, borderRadius:'50%', background:'linear-gradient(135deg,var(--primary),var(--accent))', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:600 }}>{moment.userName?.split(' ').map(n=>n[0]).join('').toUpperCase().slice(0,2)}</div>}
-                <div style={{ flex:1 }}>
-                  <p style={{ margin:0, fontWeight:600, fontSize:14 }}>{moment.userName}</p>
-                  <p style={{ margin:0, fontSize:12, color:'var(--text-secondary)' }}>{formatTime(moment.createdAt)}</p>
-                </div>
-                {user?.uid === moment.userId && <button onClick={()=>deleteMoment(moment.id)} style={{ background:'none', border:'none', color:'var(--text-secondary)', fontSize:18, cursor:'pointer' }}>✕</button>}
+
+        {/* FORM */}
+        {showForm && (
+          <form className="moment-form-card improved" onSubmit={handleSubmit}>
+            
+            {/* TEXT */}
+            <div className="form-row spaced-row">
+              <label className="form-label left">Text</label>
+              <textarea className="form-input textarea" value={text} onChange={(e)=>setText(e.target.value)} />
+            </div>
+
+            {/* IMAGE */}
+            <div className="form-row spaced-row">
+              <label className="form-label left">Image URL (optional)</label>
+              <input type="url" className="form-input" value={imageUrl} onChange={(e)=>setImageUrl(e.target.value)} />
+            </div>
+
+            {/* CONTROL ROW */}
+            <div className="form-row controls-row spaced-row">
+
+              <div className="control">
+                <label className="form-label small left">Background</label>
+                <input type="color" className="color-input" value={bgColor} onChange={e=>setBgColor(e.target.value)} />
               </div>
 
-              <MomentCard text={moment.text} imageUrl={moment.imageUrl} backgroundColor={moment.backgroundColor} textColor={moment.textColor} userName={moment.userName} userPhoto={moment.userPhoto} timestamp={moment.createdAt} />
+              <div className="control">
+                <label className="form-label small left">Text Color</label>
+                <input type="color" className="color-input" value={textColor} onChange={e=>setTextColor(e.target.value)} />
+              </div>
+
+              <div className="control control-box">
+                <label className="form-label small left">Font Size ({fontSize}px)</label>
+                <div className="slider-box">
+                  <input type="range" min="10" max="32" value={fontSize} onChange={(e)=>setFontSize(e.target.value)} />
+                </div>
+              </div>
+
+              <div className="control">
+                <label className="form-label small left">Font Family</label>
+                <select className="form-input" value={fontFamily} onChange={(e)=>setFontFamily(e.target.value)}>
+                  {SAFE_FONTS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                </select>
+              </div>
+
             </div>
-          ))}
+
+            {/* PREVIEW */}
+            <div className="form-row spaced-row">
+              <label className="form-label left">Preview</label>
+
+              <div className="preview-wrapper">
+                <div className="moment-preview final-size">
+                  <div className="moment-content" style={{
+                    background: bgColor,
+                    color: textColor,
+                    fontSize: `${fontSize}px`,
+                    fontFamily
+                  }}>
+                    {imageUrl ? (
+                      <div className="content-image-wrap">
+                        <img src={imageUrl} alt="" />
+                        {text && <div className="content-image-text">{text}</div>}
+                      </div>
+                    ) : (
+                      <div className="content-text-only">{text}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* ACTIONS */}
+            <div className="form-row form-actions spaced-row">
+              <button type="submit" className="btn-primary">
+                <RxCheckCircled size={18} style={{ marginRight: 6 }} />
+                {editingId ? 'Save Changes' : 'Post Moment'}
+              </button>
+
+              <button type="button" className="btn-primary" onClick={()=>{ setShowForm(false); setEditingId(null); }}>
+                <RxCross2 size={18} style={{ marginRight: 6 }} />
+                Close
+              </button>
+            </div>
+
+          </form>
+        )}
+
+        {/* GRID */}
+        <div className="moments-grid">
+          {loading ? (
+            <div className="empty-note">Loading...</div>
+          ) : visibleMoments.length === 0 ? (
+            <div className="empty-note">No moments yet</div>
+          ) : (
+            visibleMoments.map(m => {
+              const profile = userProfiles[m.userId] || {};
+              return (
+                <div key={m.id} className="moment-item">
+                  <div className="moment-inner">
+                    
+                    {/* TOP (avatar + name) */}
+                    <div className="moment-top">
+                      <div className="moment-userinfo-left">
+                        {profile.photoURL ? (
+                          <img className="moment-avatar" src={profile.photoURL} alt="" />
+                        ) : (
+                          <div className="moment-avatar-placeholder">
+                            {(profile.name || 'U').slice(0,2).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="moment-meta-left">
+                          <div className="moment-username">{profile.name || 'Unknown'}</div>
+                          <div className="moment-time">
+                            {formatTime(m.createdAt)} • {(m.expiryDays ?? 1)}d
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* MENU BUTTON */}
+                      {user?.uid === m.userId && (
+                        <div className="moment-menu-wrap">
+                          <button className="moment-menu-btn" onClick={()=>setOpenMenuFor(openMenuFor === m.id ? null : m.id)}>
+                            <RiMore2Fill size={22}/>
+                          </button>
+
+                          {openMenuFor === m.id && (
+                            <div className="moment-menu animated-menu">
+                              
+                              <button className="menu-item" onClick={()=>addMoreDay(m)}>
+                                <RiTimeFill size={16}/> Extend +1 day
+                              </button>
+
+                              <button className="menu-item" onClick={()=>openEdit(m)}>
+                                <RiEditFill size={16}/> Edit
+                              </button>
+
+                              <button className="menu-item remove" onClick={()=>handleDelete(m.id)}>
+                                <RiDeleteBin6Fill size={16}/> Remove
+                              </button>
+
+                            </div>
+                          )}
+
+                        </div>
+                      )}
+
+                    </div>
+
+                    {/* CONTENT AREA */}
+                    <div className="moment-body">
+                      <div className="moment-content" style={{
+                        background: m.backgroundColor,
+                        color: m.textColor,
+                        fontFamily: m.fontFamily,
+                        fontSize: `${m.fontSize}px`
+                      }}>
+                        {m.imageUrl ? (
+                          <div className="content-image-wrap">
+                            <img src={m.imageUrl} alt="" />
+                            {m.text && <div className="content-image-text">{m.text}</div>}
+                          </div>
+                        ) : (
+                          <div className="content-text-only">{m.text}</div>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
-      )}
+
       </div>
     </div>
   );
-};
-
-export default Moments;
+}

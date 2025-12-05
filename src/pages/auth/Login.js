@@ -1,11 +1,13 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { db } from '../../firebase/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 import '../../components/styles/common.css';
 
 const Login = () => {
   const navigate = useNavigate();
-  const { signInWithGoogle, onboarded } = useAuth();
+  const { signInWithGoogle } = useAuth();
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState('');
 
@@ -13,8 +15,19 @@ const Login = () => {
     try {
       setLoading(true);
       setError('');
-      await signInWithGoogle();
-      navigate(onboarded ? '/chat' : '/onboarding');
+      const result = await signInWithGoogle();
+      
+      // Check if user has already completed onboarding by checking user document
+      if (result && result.user) {
+        const userDoc = await getDoc(doc(db, 'users', result.user.uid));
+        if (userDoc.exists()) {
+          // User has already onboarded
+          navigate('/chat');
+        } else {
+          // New user, show onboarding
+          navigate('/onboarding');
+        }
+      }
     } catch (err) {
       console.error('Error signing in with Google:', err);
       setError('Failed to sign in. Please try again.');
