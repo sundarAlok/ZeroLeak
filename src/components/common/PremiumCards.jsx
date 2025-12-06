@@ -3,8 +3,9 @@ import React from 'react';
 import '../styles/common.css';
 import { FiMoreVertical } from 'react-icons/fi';
 import { GrFormPin } from 'react-icons/gr';
+import { getCachedUser } from '../../utils/cacheManager';
 
-export const ChatCard = ({ user, lastMessage, lastMessagePreview, timestamp, isActive, onCardClick, onMenuClick, unreadCount = 0, participantCount = 2, pinned = false }) => {
+export const ChatCard = ({ user, lastMessage, lastMessagePreview, timestamp, isActive, onCardClick, onMenuClick, unreadCount = 0, participantCount = 2, pinned = false, participants = [], isGroup = false }) => {
   const [photoError, setPhotoError] = React.useState(false);
   const getInitials = (name) => (name ? name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2) : '?');
   const getDisplayName = (u) => {

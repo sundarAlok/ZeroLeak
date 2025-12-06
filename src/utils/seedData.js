@@ -8,6 +8,7 @@ export const seedData = async () => {
     {
       id: 'user1',
       name: 'John Doe',
+      username: 'johndoe',
       bio: 'I am using ZeroLeak',
       dob: '1990-01-01',
       phone: '+91-9876543210',
@@ -17,6 +18,7 @@ export const seedData = async () => {
     {
       id: 'user2',
       name: 'Jane Smith',
+      username: 'janesmith',
       bio: 'Loving ZeroLeak!',
       dob: '1985-05-15',
       phone: '+91-9876543211',

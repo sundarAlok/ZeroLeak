@@ -518,6 +518,25 @@ const Chat = () => {
         participants: meta.participants || []
       };
 
+      // For groups, fetch participant usernames if not cached
+      if (built.isGroup && built.participants.length > 0) {
+        const missingUsernames = built.participants.filter(pid => !getCachedUser(pid)?.username);
+        if (missingUsernames.length > 0) {
+          try {
+            const userDocs = await Promise.all(missingUsernames.map(pid => getDoc(doc(db, 'users', pid))));
+            userDocs.forEach((doc, idx) => {
+              if (doc.exists()) {
+                cacheUser(missingUsernames[idx], doc.data());
+              }
+            });
+            // Trigger re-render to show fetched usernames
+            setActiveConvo(prev => ({ ...prev }));
+          } catch (err) {
+            console.warn('Failed to fetch participant usernames for group', err);
+          }
+        }
+      }
+
       setActiveConvo(prev => (prev && prev.id === built.id) ? prev : built);
 
       // mobile behavior: hide sidebar after setting activeConvo (give render a tick)
@@ -1070,7 +1089,17 @@ const Chat = () => {
               {activeConvo.user?.photoURL ? <img src={activeConvo.user.photoURL} alt="" style={{ width:40, height:40, borderRadius:20, objectFit:'cover' }} /> : <div style={{ width:40, height:40, borderRadius:20, background:'linear-gradient(135deg,var(--primary),var(--accent))', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:600 }}>{(activeConvo.user?.name||'').split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}</div>}
               <div>
                 <p style={{ margin:0, fontWeight:600 }}>{activeConvo.user?.name}</p>
-                <p style={{ margin:0, fontSize:12, color:'var(--text-secondary)' }}>@{activeConvo.user?.username || ''}</p>
+          <p style={{ margin:0, fontSize:12, color:'var(--text-secondary)' }}>
+            {activeConvo.isGroup ? (() => {
+              const participants = activeConvo.participants || [];
+              const usernames = participants.filter(pid => pid !== user?.uid).map(pid => getCachedUser(pid)?.username || 'unknown');
+              if (usernames.length > 3) {
+                return usernames.slice(0, 3).join(', ') + '...';
+              } else {
+                return usernames.join(', ');
+              }
+            })() : `@${activeConvo.user?.username || ''}`}
+          </p>
               </div>
               <button onClick={(e)=>{ const rect = e.currentTarget.getBoundingClientRect(); setMenuState({ open:true, x:rect.left, y:rect.bottom+6, convoId: activeConvo.id }); }} style={{ marginLeft:'auto', background:'none', border:'none', fontSize:20, cursor:'pointer' }}><FiMoreVertical size={20} /></button>
             </div>
@@ -1084,30 +1113,117 @@ const Chat = () => {
                   </div>
                 </div>
               ) : (
-                messages.map((msg, idx) => {
-                  const isOwn = msg.senderId === user.uid;
-                  const otherId = activeConvo?.user?.id;
-                  const readByOther = otherId && msg.readBy && msg.readBy.includes(otherId);
-                  const deliveredToOther = otherId && msg.deliveredTo && msg.deliveredTo.includes(otherId);
-                  const displayText = activeConvo.isGroup ? (isOwn ? `You: ${msg.text}` : `${getCachedUser(msg.senderId)?.name || msg.senderName || 'Unknown'}: ${msg.text}`) : msg.text;
-                  return (
-                    <div key={msg.id || idx} style={{ display:'flex', justifyContent: isOwn ? 'flex-end' : 'flex-start', marginBottom:8 }}>
-                      <div style={{ background: isOwn ? 'linear-gradient(120deg,var(--primary),var(--accent))' : 'var(--bg)', color: isOwn ? '#fff' : 'var(--text-primary)', padding:'10px 14px', borderRadius:12, maxWidth:'60%', wordWrap:'break-word', fontSize:14, position:'relative', boxShadow:'var(--shadow-sm)' }}>
-                        <div>{displayText}</div>
-                        <div className="message-meta-row" style={{ marginTop:8, justifyContent:'flex-end' }}>
-                          <div className="msg-time">{(() => {
-                            if (!msg.timestamp) return '';
-                            try {
-                              const d = msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
-                              return d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
-                            } catch(e){ return ''; }
-                          })()}</div>
-                          {isOwn && <div style={{ display:'flex', alignItems:'center' }}><span className={`msg-tick ${readByOther ? 'read' : (deliveredToOther ? 'delivered' : '')}`} title={readByOther ? 'Read' : (deliveredToOther ? 'Delivered' : 'Sent')} /></div>}
+                (() => {
+                  // Helper function to get date separator text
+                  const getDateSeparator = (timestamp) => {
+                    if (!timestamp) return '';
+                    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+                    const today = new Date();
+                    const yesterday = new Date(today);
+                    yesterday.setDate(yesterday.getDate() - 1);
+
+                    if (date.toDateString() === today.toDateString()) {
+                      return 'Today';
+                    } else if (date.toDateString() === yesterday.toDateString()) {
+                      return 'Yesterday';
+                    } else {
+                      return date.toLocaleDateString('en-US', { weekday: 'long' });
+                    }
+                  };
+
+                  // Group messages by date and add separators
+                  const messageGroups = [];
+                  let currentDate = null;
+
+                  messages.forEach((msg, idx) => {
+                    const msgDate = msg.timestamp ? (msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp)).toDateString() : null;
+                    if (msgDate !== currentDate) {
+                      if (currentDate !== null) {
+                        messageGroups.push({ type: 'separator', date: getDateSeparator(msg.timestamp) });
+                      }
+                      currentDate = msgDate;
+                    }
+                    messageGroups.push({ type: 'message', msg, idx });
+                  });
+
+                  return messageGroups.map((item, groupIdx) => {
+                    if (item.type === 'separator') {
+                      return (
+                        <div key={`sep-${groupIdx}`} style={{ display: 'flex', justifyContent: 'center', margin: '16px 0' }}>
+                          <div style={{
+                            background: 'var(--bg)',
+                            color: 'var(--text-secondary)',
+                            padding: '4px 12px',
+                            borderRadius: 12,
+                            fontSize: 12,
+                            fontWeight: 500,
+                            border: '1px solid var(--border)'
+                          }}>
+                            {item.date}
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  );
-                })
+                      );
+                    } else {
+                      const { msg, idx } = item;
+                      const isOwn = msg.senderId === user.uid;
+                      const otherId = activeConvo?.user?.id;
+                      const readByOther = otherId && msg.readBy && msg.readBy.includes(otherId);
+                      const deliveredToOther = otherId && msg.deliveredTo && msg.deliveredTo.includes(otherId);
+
+                      return (
+                        <div key={msg.id || idx} style={{ display:'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start', marginBottom: 8 }}>
+                          {/* Sender name for group messages (only for received messages) */}
+                          {activeConvo.isGroup && !isOwn && (
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 2, marginLeft: 12 }}>
+                              {getCachedUser(msg.senderId)?.name || msg.senderName || 'Unknown'}
+                            </div>
+                          )}
+                          <div style={{
+                            display: 'flex',
+                            justifyContent: isOwn ? 'flex-end' : 'flex-start',
+                            alignItems: 'flex-end',
+                            gap: 4
+                          }}>
+                            <div style={{
+                              background: isOwn ? '#dcf8c6' : '#fff',
+                              color: isOwn ? '#000' : 'var(--text-primary)',
+                              padding: '8px 12px',
+                              borderRadius: isOwn ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                              maxWidth: '70%',
+                              wordWrap: 'break-word',
+                              fontSize: 14,
+                              position: 'relative',
+                              boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                              border: isOwn ? 'none' : '1px solid #e0e0e0'
+                            }}>
+                              <div>{msg.text}</div>
+                            </div>
+                            <div style={{
+                              fontSize: 11,
+                              color: 'var(--text-secondary)',
+                              marginBottom: 2,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 2
+                            }}>
+                              <span>{(() => {
+                                if (!msg.timestamp) return '';
+                                try {
+                                  const d = msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
+                                  return d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+                                } catch(e){ return ''; }
+                              })()}</span>
+                              {isOwn && (
+                                <span className={`msg-tick ${readByOther ? 'read' : (deliveredToOther ? 'delivered' : '')}`}
+                                      title={readByOther ? 'Read' : (deliveredToOther ? 'Delivered' : 'Sent')} />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+                  });
+                })()
               )}
               <div ref={messagesEndRef} />
             </div>
