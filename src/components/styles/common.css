@@ -316,36 +316,102 @@ body {
 }
 
 .message {
-  display: flex;
-  margin-bottom: 8px;
-}
-
-.message.own {
-  justify-content: flex-end;
-}
-
-.message-content {
-  max-width: 60%;
-  padding: 10px 12px;
-  border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.4;
-}
-
-.message.other .message-content {
-  background: var(--bg-tertiary);
+  width: 100%;
+  margin: 15px 0;
   color: var(--text-primary);
 }
 
-.message.own .message-content {
-  background: var(--primary);
+.message.own {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.message.other {
+  display: flex;
+  justify-content: flex-start;
+}
+
+/* WhatsApp-style message container */
+.msg {
+  max-width: 340px;
+  background: #202c33;
+  padding: 8px 12px;
+  border-radius: 8px;
+  position: relative;
+  color: #e9edef;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.message.own .msg {
+  background: #005c4b;
   color: white;
 }
 
-.message-time {
+/* Top row: name (left) + username (right) */
+.msg-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.msg-header .name {
   font-size: 12px;
-  color: var(--text-secondary);
+  font-weight: bold;
+  color: rgba(233, 237, 239, 0.7);
+}
+
+.msg-header .username {
+  font-size: 9px;
+  color: rgba(233, 237, 239, 0.5);
+}
+
+.message.own .msg-header .name,
+.message.own .msg-header .username {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Middle message bubble */
+.msg-body {
+  padding: 5px 30px 0 0;
+  margin: 0 30px 0 0;
+  font-size: 14px;
+  line-height: 1.35em;
+  position: relative;
+  word-wrap: break-word;
+  color: inherit;
+}
+
+/* Footer (time + ticks) */
+.msg-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0;
   margin-top: 4px;
+}
+
+.msg-footer .time {
+  font-size: 9px;
+  color: rgba(233, 237, 239, 0.6);
+  position: relative;
+  top: -9px;
+  padding: 0;
+}
+
+.message.own .msg-footer .time {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.tick {
+  margin-left: 4px;
+  font-size: 8px;
+  color: #00d4aa;
+  position: relative;
+  top: -10px;
+  padding: 0;
+}
+
+.message.own .tick {
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .chat-input-area {
@@ -712,9 +778,6 @@ body {
   text-overflow: ellipsis;
 }
 
-.user-card-name { font-size: 15px; font-weight: 700; color: var(--text-primary); margin: 0 0 2px 0; }
-.user-card-username { font-size: 12px; color: var(--text-secondary); margin: 0; }
-
 /* Moment Card */
 .moment-card {
   border-radius: 16px;
@@ -982,8 +1045,8 @@ body {
 .msg-time { color: var(--text-secondary); font-size: 12px; }
 
 .msg-tick {
-  width: 18px;
-  height: 12px;
+  width: 14px;
+  height: 10px;
   display: inline-block;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 12' fill='none'><path d='M1 7l3 3 8-8' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   background-size: contain;
@@ -1002,26 +1065,29 @@ body {
 /* WhatsApp-like message bubbles */
 .message-content {
   padding: 8px 12px;
-  border-radius: 18px;
   max-width: 75%;
   word-wrap: break-word;
   font-size: 14px;
   line-height: 1.4;
   position: relative;
   box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  display: flex;
+  flex-direction: column;
 }
 
 .message.other .message-content {
-  background: var(--card-bg);
+  background: rgba(124, 58, 237, 0.2);
   color: var(--text-primary);
   border: 1px solid var(--border);
   margin-right: auto;
+  border-radius: 18px 18px 18px 4px;
 }
 
 .message.own .message-content {
-  background: #dcf8c6;
-  color: #000;
+  background: var(--primary);
+  color: white;
   margin-left: auto;
+  border-radius: 18px 18px 4px 18px;
 }
 
 .message-meta-row {
@@ -1034,14 +1100,18 @@ body {
   color: var(--text-secondary);
 }
 
+.message.own .message-meta-row {
+  color: rgba(255, 255, 255, 0.8);
+}
+
 /* Dark theme message bubbles */
 [data-theme="dark"] .message.other .message-content {
-  background: var(--bg-tertiary);
+  background: rgba(124, 58, 237, 0.15);
   border: 1px solid var(--border);
 }
 
 [data-theme="dark"] .message.own .message-content {
-  background: #005c4b;
+  background: var(--primary);
   color: #fff;
 }
 

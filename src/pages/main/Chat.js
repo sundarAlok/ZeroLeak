@@ -1171,42 +1171,22 @@ const Chat = () => {
                       const deliveredToOther = otherId && msg.deliveredTo && msg.deliveredTo.includes(otherId);
 
                       return (
-                        <div key={msg.id || idx} style={{ display:'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start', marginBottom: 8 }}>
-                          {/* Sender name for group messages (only for received messages) */}
-                          {activeConvo.isGroup && !isOwn && (
-                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 2, marginLeft: 12 }}>
-                              {getCachedUser(msg.senderId)?.name || msg.senderName || 'Unknown'}
+                        <div key={msg.id || idx} className={`message ${isOwn ? 'own' : 'other'}`} style={{ marginBottom: 8 }}>
+                          <div className="msg">
+                            {/* Header: name (left) + username (right) - only for received messages */}
+                            {!isOwn && (
+                              <div className="msg-header">
+                                <div className="name">{getCachedUser(msg.senderId)?.name || msg.senderName || 'Unknown'}</div>
+                                <div className="username">@{getCachedUser(msg.senderId)?.username || 'unknown'}</div>
+                              </div>
+                            )}
+                            {/* Message body */}
+                            <div className="msg-body">
+                              {msg.text}
                             </div>
-                          )}
-                          <div style={{
-                            display: 'flex',
-                            justifyContent: isOwn ? 'flex-end' : 'flex-start',
-                            alignItems: 'flex-end',
-                            gap: 4
-                          }}>
-                            <div style={{
-                              background: isOwn ? '#dcf8c6' : '#fff',
-                              color: isOwn ? '#000' : 'var(--text-primary)',
-                              padding: '8px 12px',
-                              borderRadius: isOwn ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                              maxWidth: '70%',
-                              wordWrap: 'break-word',
-                              fontSize: 14,
-                              position: 'relative',
-                              boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                              border: isOwn ? 'none' : '1px solid #e0e0e0'
-                            }}>
-                              <div>{msg.text}</div>
-                            </div>
-                            <div style={{
-                              fontSize: 11,
-                              color: 'var(--text-secondary)',
-                              marginBottom: 2,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 2
-                            }}>
-                              <span>{(() => {
+                            {/* Footer: time + ticks */}
+                            <div className="msg-footer">
+                              <span className="time">{(() => {
                                 if (!msg.timestamp) return '';
                                 try {
                                   const d = msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
@@ -1214,8 +1194,9 @@ const Chat = () => {
                                 } catch(e){ return ''; }
                               })()}</span>
                               {isOwn && (
-                                <span className={`msg-tick ${readByOther ? 'read' : (deliveredToOther ? 'delivered' : '')}`}
-                                      title={readByOther ? 'Read' : (deliveredToOther ? 'Delivered' : 'Sent')} />
+                                <span className="tick" title={readByOther ? 'Read' : (deliveredToOther ? 'Delivered' : 'Sent')}>
+                                  {readByOther ? '✔✔' : (deliveredToOther ? '✔✔' : '✔')}
+                                </span>
                               )}
                             </div>
                           </div>
