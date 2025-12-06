@@ -11,9 +11,9 @@ import '../../components/styles/common.css';
 import { getCachedConversations, cacheConversations, cacheUser, getCachedUser, getCachedMessages, cacheMessages } from '../../utils/cacheManager';
 import { FiMenu, FiMoreVertical, FiMapPin, FiTrash2, FiLock, FiUnlock, FiMessageCircle, FiSmile, FiUserX } from 'react-icons/fi';
 import { arrayRemove } from 'firebase/firestore';
-import { HiOutlineUserGroup, HiArrowRight } from 'react-icons/hi2';
-import { BsBookmarkHeart } from 'react-icons/bs';
-
+import { HiOutlineUserGroup } from 'react-icons/hi2';
+import { BsBookmarkHeart, BsEmojiLaughing } from 'react-icons/bs';
+import { LuSendHorizontal } from "react-icons/lu";
 
 const Chat = () => {
   const { user } = useAuth();
@@ -1082,10 +1082,10 @@ const Chat = () => {
       })()}
 
       {/* Chat area */}
-      <div style={{ flex:1, display:'flex', flexDirection:'column', background:'var(--card-bg)', minWidth: Math.max(360, getMaxSideWidth()) }}>
+      <div style={{ flex:1, display:'flex', flexDirection:'column', background:'var(--right-chat-area-bg)', minWidth: Math.max(360, getMaxSideWidth()) }}>
         {activeConvo ? (
           <>
-            <div style={{ padding:16, borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:12 }}>
+            <div style={{ padding:16, borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:12, background: 'var(--card-bg)' }}>
               {activeConvo.user?.photoURL ? <img src={activeConvo.user.photoURL} alt="" style={{ width:40, height:40, borderRadius:20, objectFit:'cover' }} /> : <div style={{ width:40, height:40, borderRadius:20, background:'linear-gradient(135deg,var(--primary),var(--accent))', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:600 }}>{(activeConvo.user?.name||'').split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}</div>}
               <div>
                 <p style={{ margin:0, fontWeight:600 }}>{activeConvo.user?.name}</p>
@@ -1209,10 +1209,14 @@ const Chat = () => {
               <div ref={messagesEndRef} />
             </div>
 
-            <form onSubmit={sendMessage} style={{ padding:16, borderTop:'1px solid var(--border)', display:'flex', gap:8 }}>
-              <input type="text" placeholder="Type a message..." value={newMessage} onChange={(e)=>setNewMessage(e.target.value)} style={{ flex:1, padding:'10px 12px', borderRadius:8, border:'1px solid var(--border)', background:'var(--input-bg)', color:'var(--text-primary)' }} />
-              <button type="submit" aria-label="Send" disabled={!newMessage.trim()} style={{ padding:'10px 14px', background: newMessage.trim() ? 'linear-gradient(90deg,var(--primary),var(--accent))' : 'var(--border)', color:'#fff', border:'none', borderRadius:8, cursor: newMessage.trim() ? 'pointer' : 'not-allowed', fontWeight:600, display:'inline-flex', alignItems:'center', justifyContent:'center' }}>
-                <HiArrowRight size={18} />
+            <form onSubmit={sendMessage} style={{ padding:'4px 10px', borderTop:'1px solid var(--border)', display:'flex', gap:8, background: 'var(--card-bg)' }}>
+              {/* emoji button code */}
+              <BsEmojiLaughing size={22} className="emoji-button" onClick={() => { alert('Emoji picker not implemented yet'); }} />
+              {/* message sending input bar */}
+              <input type="text" placeholder="Type a message..." value={newMessage} onChange={(e)=>setNewMessage(e.target.value)} style={{ flex:1, padding:'8px 10px', borderRadius:8, border:'none', background:'var(--card-bg)', color:'var(--text-primary)', outline: 'none', fontSize: 14, letterSpacing:0.3 }} />
+              {/* message sending button */}
+              <button type="submit" aria-label="Send" disabled={!newMessage.trim()} style={{ padding:'10px 14px', background: newMessage.trim() ? 'var(--card-bg)' : 'var(--card-bg)', color: newMessage.trim() ? 'var(--text-primary)' : 'var(--card-bg)', border:'none', borderRadius:8, cursor: newMessage.trim() ? 'pointer' : 'not-allowed', fontWeight:600, display:'inline-flex', alignItems:'center', justifyContent:'center' }}>
+                <LuSendHorizontal size={18} />
               </button>
             </form>
           </>
