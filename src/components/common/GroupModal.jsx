@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../firebase/firebase';
 import '../styles/common.css';
+import '../styles/modal.css';
 
 const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
   const [step, setStep] = useState(1);
@@ -67,7 +68,7 @@ const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
       });
 
       // create a conversation for the group so it appears in chat list
-      const convo = await addDoc(collection(db, 'conversations'), {
+      await addDoc(collection(db, 'conversations'), {
         participants: members,
         isGroup: true,
         groupId: groupDoc.id,
