@@ -16,6 +16,21 @@ const CACHE_DURATION = {
   MESSAGES: 60 * 60 * 1000       // 1 hour
 };
 
+const CACHE_VERSION_KEY = 'zeroleak_cache_version';
+const CACHE_VERSION = '2';
+
+try {
+  if (localStorage.getItem(CACHE_VERSION_KEY) !== CACHE_VERSION) {
+    [CACHE_KEYS.USERS, CACHE_KEYS.CONVERSATIONS].forEach(key => {
+      localStorage.removeItem(key);
+      localStorage.removeItem(CACHE_KEYS.CACHE_TIMESTAMP(key));
+    });
+    localStorage.setItem(CACHE_VERSION_KEY, CACHE_VERSION);
+  }
+} catch (err) {
+  console.warn('Cache migration error:', err);
+}
+
 // Get cached data if valid
 export const getCachedData = (key) => {
   try {

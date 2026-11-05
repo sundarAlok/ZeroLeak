@@ -1,12 +1,13 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, db } from '../firebase/firebase';
 import { GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { 
   storeUserCredentials, 
   storeUserProfile,
   clearAuthData 
 } from '../utils/storageManager';
+import { getPublicProfile } from '../firebase/publicProfile';
 
 const AuthContext = createContext();
 
@@ -27,7 +28,13 @@ export const AuthProvider = ({ children }) => {
           if (userDoc.exists()) {
             setOnboarded(true);
             // Store user profile data
-            storeUserProfile(u.uid, userDoc.data());
+            const profile = userDoc.data();
+            storeUserProfile(u.uid, profile);
+            try {
+              await setDoc(doc(db, 'publicProfiles', u.uid), getPublicProfile(u.uid, profile));
+            } catch (err) {
+              console.error('Error migrating public profile:', err);
+            }
           } else {
             setOnboarded(false);
           }

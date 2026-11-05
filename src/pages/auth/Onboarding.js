@@ -1,8 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth } from '../../firebase/firebase';
-import { doc, setDoc, serverTimestamp, query, collection, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, query, collection, where, getDocs, writeBatch } from 'firebase/firestore';
 import '../../components/styles/common.css';
+import { getPublicProfile } from '../../firebase/publicProfile';
 
 const Onboarding = () => {
   const [formData, setFormData] = useState({
@@ -34,7 +35,7 @@ const Onboarding = () => {
     }
 
     try {
-      const q = query(collection(db, 'users'), where('username', '==', username.toLowerCase()));
+      const q = query(collection(db, 'publicProfiles'), where('username', '==', username.toLowerCase()));
       const snapshot = await getDocs(q);
       if (snapshot.size > 0) {
         setUsernameError('Username already taken');
@@ -134,8 +135,7 @@ const Onboarding = () => {
       setLoading(true);
       const user = auth.currentUser;
       if (user) {
-        const userDoc = doc(db, 'users', user.uid);
-        await setDoc(userDoc, {
+        const profile = {
           uid: user.uid,
           name: formData.name,
           username: formData.username.toLowerCase(),
@@ -145,7 +145,11 @@ const Onboarding = () => {
           email: user.email,
           photoURL: user.photoURL || null,
           createdAt: serverTimestamp()
-        });
+        };
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'users', user.uid), profile);
+        batch.set(doc(db, 'publicProfiles', user.uid), getPublicProfile(user.uid, profile));
+        await batch.commit();
         navigate('/chat');
       }
     } catch (err) {

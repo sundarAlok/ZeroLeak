@@ -1,8 +1,9 @@
 // Profile.js
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { doc, updateDoc, getDoc, getDocs, query, where, collection } from 'firebase/firestore';
+import { doc, getDoc, getDocs, query, where, collection, writeBatch } from 'firebase/firestore';
 import { db } from '../../firebase/firebase';
+import { getPublicProfile } from '../../firebase/publicProfile';
 import '../../components/styles/common.css';
 import { getCachedUserProfile, cacheUserProfile } from '../../utils/cacheManager';
 import { MdLogout } from "react-icons/md";
@@ -90,7 +91,15 @@ const Profile = () => {
     if (!editData.name || !editData.bio) { setError('Name and bio are required'); return; }
     try {
       setSaving(true);
-      await updateDoc(doc(db, 'users', user.uid), { name: editData.name, bio: editData.bio, photoURL: editData.photoURL || null });
+      const updatedProfile = { ...profile, ...editData };
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'users', user.uid), {
+        name: editData.name,
+        bio: editData.bio,
+        photoURL: editData.photoURL || null
+      });
+      batch.set(doc(db, 'publicProfiles', user.uid), getPublicProfile(user.uid, updatedProfile));
+      await batch.commit();
       setProfile(editData);
       setIsEditing(false);
       setSuccess('Profile updated successfully!');

@@ -90,7 +90,7 @@ export default function Moments() {
     for (const uid of uids) {
       if (userProfilesRef.current[uid]) continue;
       try {
-        const userRef = doc(db, 'users', uid);
+        const userRef = doc(db, 'publicProfiles', uid);
         const unsubUser = onSnapshot(userRef, (snap) => {
           if (snap.exists()) {
             const data = snap.data();

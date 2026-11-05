@@ -236,7 +236,7 @@ const Chat = () => {
         if (missingIds.length > 0) {
           Promise.all(
             missingIds.map(id => 
-              getDoc(doc(db, 'users', id))
+              getDoc(doc(db, 'publicProfiles', id))
                 .then(d => {
                   if (d.exists()) {
                     cacheUser(id, d.data()); // Cache for future use
@@ -496,7 +496,7 @@ const Chat = () => {
           const participants = (meta && meta.participants) || convo.participants || [];
           const otherId = participants.find(id => id !== user.uid) || (convo.user && convo.user.id) || null;
           if (otherId) {
-            const ud = await getDoc(doc(db, 'users', otherId));
+            const ud = await getDoc(doc(db, 'publicProfiles', otherId));
             if (ud.exists()) userInfo = { id: otherId, ...ud.data() };
             else userInfo = { id: otherId, name: 'Unknown', username: '', photoURL: '' };
           }
@@ -646,18 +646,18 @@ const Chat = () => {
         setLoading(true);
         const resultsMap = new Map();
         try {
-          const uq = query(collection(db, 'users'), where('username', '==', q), limit(10));
+          const uq = query(collection(db, 'publicProfiles'), where('username', '==', q.toLowerCase()), limit(10));
           const snap = await getDocs(uq);
           snap.docs.forEach(d => { const u = { id: d.id, ...d.data() }; if (u.id !== user.uid) resultsMap.set(u.id, u); });
         } catch (e) {}
         try {
-          const nq = query(collection(db, 'users'), where('name', '>=', q), where('name', '<=', q + '\uf8ff'), limit(10));
+          const nq = query(collection(db, 'publicProfiles'), where('name', '>=', q), where('name', '<=', q + '\uf8ff'), limit(10));
           const snap2 = await getDocs(nq);
           snap2.docs.forEach(d => { const u = { id: d.id, ...d.data() }; if (u.id !== user.uid) resultsMap.set(u.id, u); });
         } catch (e) {}
         if (resultsMap.size === 0) {
           let users = usersCacheRef.current;
-          if (!users) { const snap = await getDocs(query(collection(db, 'users'), limit(500))); users = snap.docs.map(d => ({ id: d.id, ...d.data() })); usersCacheRef.current = users; }
+          if (!users) { const snap = await getDocs(query(collection(db, 'publicProfiles'), limit(500))); users = snap.docs.map(d => ({ id: d.id, ...d.data() })); usersCacheRef.current = users; }
           users.forEach(u => {
             if (u.id === user.uid) return;
             const name = (u.name||'').toLowerCase();
@@ -1266,7 +1266,7 @@ const Chat = () => {
                         // ensure we have id; if not, fetch from Firestore
                         if (!u || !u.id) {
                           try {
-                            const ud = await getDoc(doc(db, 'users', fid));
+                            const ud = await getDoc(doc(db, 'publicProfiles', fid));
                             if (ud && ud.exists()) startConversation({ id: ud.id, ...ud.data() });
                             else startConversation({ id: fid });
                           } catch (e) { startConversation({ id: fid }); }
@@ -1278,7 +1278,7 @@ const Chat = () => {
                     <div style={{ marginLeft:8 }}>
                       <button className="zl-btn" onClick={async () => {
                         if (cached && cached.id) return startConversation(cached);
-                        try { const ud = await getDoc(doc(db, 'users', fid)); if (ud && ud.exists()) startConversation({ id: ud.id, ...ud.data() }); else startConversation({ id: fid }); } catch(e){ startConversation({ id: fid }); }
+                        try { const ud = await getDoc(doc(db, 'publicProfiles', fid)); if (ud && ud.exists()) startConversation({ id: ud.id, ...ud.data() }); else startConversation({ id: fid }); } catch(e){ startConversation({ id: fid }); }
                       }}>Message</button>
                     </div>
                   </div>

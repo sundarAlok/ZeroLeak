@@ -37,6 +37,7 @@ ZeroLeak is a modern React-based social media application designed for secure an
    - Create a Firebase project at [Firebase Console](https://console.firebase.google.com/).
    - Enable Authentication, Firestore, and Functions.
    - Copy `.env.example` to `.env` and fill in the Firebase values from your project settings.
+   - Existing accounts create their public profile (`name`, `username`, `bio`, and `photoURL`) automatically when they sign in after this update. Private user details remain in their owner-only document.
    - Do not commit `.env`; the Firebase web API key is client configuration, not an authorization boundary. Protect access with Firebase Security Rules and API key restrictions.
    - Deploy functions if needed: `firebase deploy --only functions`.
 

@@ -24,7 +24,7 @@ const Favorites = () => {
           if (mounted) setFavUsers([]);
           return;
         }
-        const usersSnapPromises = favs.map(id => getDoc(doc(db, 'users', id)).catch(() => null));
+        const usersSnapPromises = favs.map(id => getDoc(doc(db, 'publicProfiles', id)).catch(() => null));
         const results = await Promise.all(usersSnapPromises);
         const users = results.filter(r=>r && r.exists()).map(r=>({ id: r.id, ...r.data() }));
         if (mounted) setFavUsers(users);

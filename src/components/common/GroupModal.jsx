@@ -32,7 +32,7 @@ const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
     }
     // simple client-side search: fetch first 50 users then filter
     try {
-      const snap = await getDocs(collection(db, 'users'));
+      const snap = await getDocs(collection(db, 'publicProfiles'));
       const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       const filtered = users
         .filter(u => u.id !== currentUser?.uid)
