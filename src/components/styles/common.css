@@ -72,7 +72,7 @@ body {
 .auth-title {
   font-size: 28px;
   font-weight: 700;
-  color: var(--text-primary);
+  color: black;
   margin: 0 0 8px 0;
   text-align: center;
 }
@@ -151,8 +151,8 @@ body {
 /* Secondary Button Specific */
 .btn-secondary {
   background: white;
-  color: var(--text-primary);
-  border: 1px solid var(--border-secondary);
+  color: black;
+  border: 1px solid var(--primary);
   margin-bottom: 12px;
 }
 

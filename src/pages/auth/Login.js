@@ -57,7 +57,7 @@ const Login = () => {
         <button 
           onClick={handleGoogleSignIn} 
           disabled={loading} 
-          className="btn-secondary" 
+          className="btn-primary" 
           style={{ fontSize: 15, fontWeight: 600 }}
         >
           {loading ? 'Signing in...' : '🔐 Sign in with Google'}
