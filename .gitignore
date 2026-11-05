@@ -4,6 +4,9 @@
 /node_modules
 /.pnp
 .pnp.js
+.env
+.env.*
+!.env.example
 
 # testing
 /coverage
@@ -70,4 +73,3 @@ credentials.json
 
 # Misc logs
 *.log
-

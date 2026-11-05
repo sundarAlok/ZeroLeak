@@ -36,7 +36,8 @@ ZeroLeak is a modern React-based social media application designed for secure an
 3. Set up Firebase:
    - Create a Firebase project at [Firebase Console](https://console.firebase.google.com/).
    - Enable Authentication, Firestore, and Functions.
-   - Copy your Firebase config to `src/firebase/firebase.js`.
+   - Copy `.env.example` to `.env` and fill in the Firebase values from your project settings.
+   - Do not commit `.env`; the Firebase web API key is client configuration, not an authorization boundary. Protect access with Firebase Security Rules and API key restrictions.
    - Deploy functions if needed: `firebase deploy --only functions`.
 
 4. Start the development server:
