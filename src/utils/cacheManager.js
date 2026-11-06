@@ -94,8 +94,9 @@ export const cacheUserProfile = (userId, data) => {
   setCacheData(CACHE_KEYS.USER_PROFILE, { ...data, userId, cachedAt: Date.now() });
 };
 
-export const getCachedUserProfile = () => {
-  return getCachedData(CACHE_KEYS.USER_PROFILE);
+export const getCachedUserProfile = (userId) => {
+  const cachedProfile = getCachedData(CACHE_KEYS.USER_PROFILE);
+  return cachedProfile?.userId === userId ? cachedProfile : null;
 };
 
 // Cache conversations list

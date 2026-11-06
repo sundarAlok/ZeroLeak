@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../../firebase/firebase';
 import '../styles/common.css';
 import '../styles/modal.css';
@@ -59,16 +59,17 @@ const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
     setCreating(true);
     try {
       const members = [currentUser.uid, ...selected.map(s => s.id)];
-      const groupDoc = await addDoc(collection(db, 'groups'), {
+      const groupDoc = doc(collection(db, 'groups'));
+      const conversationDoc = doc(collection(db, 'conversations'));
+      const batch = writeBatch(db);
+      batch.set(groupDoc, {
         name: groupName,
         photoURL: groupPhotoURL,
         ownerId: currentUser.uid,
         members,
         createdAt: serverTimestamp()
       });
-
-      // create a conversation for the group so it appears in chat list
-      await addDoc(collection(db, 'conversations'), {
+      batch.set(conversationDoc, {
         participants: members,
         isGroup: true,
         groupId: groupDoc.id,
@@ -78,6 +79,7 @@ const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
         lastMessageTime: serverTimestamp(),
         createdAt: serverTimestamp()
       });
+      await batch.commit();
 
       alert('Group created successfully');
       if (onGroupCreated) onGroupCreated();

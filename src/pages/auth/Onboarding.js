@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth } from '../../firebase/firebase';
-import { doc, setDoc, serverTimestamp, query, collection, where, getDocs, writeBatch } from 'firebase/firestore';
+import { doc, serverTimestamp, query, collection, where, getDocs, writeBatch } from 'firebase/firestore';
 import '../../components/styles/common.css';
 import { getPublicProfile } from '../../firebase/publicProfile';
 

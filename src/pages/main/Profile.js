@@ -1,7 +1,7 @@
 // Profile.js
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { doc, getDoc, getDocs, query, where, collection, writeBatch } from 'firebase/firestore';
+import { doc, query, where, collection, writeBatch, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebase/firebase';
 import { getPublicProfile } from '../../firebase/publicProfile';
 import '../../components/styles/common.css';
@@ -9,6 +9,7 @@ import { getCachedUserProfile, cacheUserProfile } from '../../utils/cacheManager
 import { MdLogout } from "react-icons/md";
 import { LiaEdit } from "react-icons/lia";
 import { BsSave2 } from "react-icons/bs";
+import AvatarCircle from '../../components/common/AvatarCircle';
 
 const Profile = () => {
   const { user, signOut } = useAuth();
@@ -25,64 +26,53 @@ const Profile = () => {
 
   useEffect(() => {
     if (!user) return;
-    let mounted = true;
-    
     // Load from cache immediately
-    const cachedProfile = getCachedUserProfile();
+    const cachedProfile = getCachedUserProfile(user.uid);
     if (cachedProfile) {
       setProfile(cachedProfile);
       setEditData(cachedProfile);
       setLoading(false);
     }
 
-    // Fetch fresh data in background
-    (async () => {
-      try {
-        // Fetch all in parallel
-        const [docSnap, convoSnap, momentSnap] = await Promise.all([
-          getDoc(doc(db, 'users', user.uid)),
-          getDocs(query(collection(db, 'conversations'), where('participants', 'array-contains', user.uid))),
-          getDocs(query(collection(db, 'moments'), where('userId', '==', user.uid)))
-        ]);
+    setLoading(!cachedProfile);
+    const unsubscribeProfile = onSnapshot(doc(db, 'users', user.uid), snapshot => {
+      const profileData = snapshot.exists() ? snapshot.data() : {
+        name: user.displayName || 'No name',
+        username: user.email?.split('@')[0] || 'user',
+        bio: '',
+        photoURL: user.photoURL || null
+      };
+      setProfile(profileData);
+      setEditData(profileData);
+      cacheUserProfile(user.uid, profileData);
+      setLoading(false);
+    }, err => {
+      console.error('Error subscribing to profile:', err);
+      setError('Failed to load profile');
+      setLoading(false);
+    });
 
-        if (!mounted) return;
+    const unsubscribeConversations = onSnapshot(
+      query(collection(db, 'conversations'), where('participants', 'array-contains', user.uid)),
+      snapshot => {
+        const nonGroupCount = snapshot.docs.filter(item => !item.data().isGroup).length;
+        const groupCount = snapshot.docs.filter(item => item.data().isGroup).length;
+        setConversationCount(nonGroupCount);
+        setGroupCount(groupCount);
+      },
+      err => console.error('Error subscribing to conversations:', err)
+    );
+    const unsubscribeMoments = onSnapshot(
+      query(collection(db, 'moments'), where('userId', '==', user.uid)),
+      snapshot => setMomentCount(snapshot.size),
+      err => console.error('Error subscribing to moments:', err)
+    );
 
-        // Set profile
-        let profileData;
-        if (docSnap.exists()) {
-          profileData = docSnap.data();
-          setProfile(profileData);
-          setEditData(profileData);
-        } else {
-          profileData = {
-            name: user.displayName || 'No name',
-            username: user.email?.split('@')[0] || 'user',
-            bio: '',
-            photoURL: user.photoURL || null
-          };
-          setProfile(profileData);
-          setEditData(profileData);
-        }
-
-        // Cache the profile for next load
-        cacheUserProfile(user.uid, profileData);
-
-        // Set counts immediately, separating groups from conversations
-        const nonGroupConvos = convoSnap.docs.filter(doc => !doc.data().isGroup);
-        const groupConvos = convoSnap.docs.filter(doc => doc.data().isGroup);
-        setConversationCount(nonGroupConvos.length);
-        setMomentCount(momentSnap.size);
-        setGroupCount(groupConvos.length);
-
-        setLoading(false);
-      } catch (err) {
-        console.error('Error fetching profile:', err);
-        setError('Failed to load profile');
-        setLoading(false);
-      }
-    })();
-    
-    return () => { mounted = false; };
+    return () => {
+      unsubscribeProfile();
+      unsubscribeConversations();
+      unsubscribeMoments();
+    };
   }, [user]);
 
   const handleUpdate = async (e) => {
@@ -112,8 +102,6 @@ const Profile = () => {
     }
   };
 
-  const getInitials = (name) => name ? name.split(' ').map(n => n[0]).join('').toUpperCase() : '?';
-
   if (loading || !profile) {
     return <div style={{ padding:20, textAlign:'center' }}><p>Loading profile...</p></div>;
   }
@@ -123,7 +111,12 @@ const Profile = () => {
       <div style={{ maxWidth:720, margin:'0 auto', padding:20, width:'100%' }}>
         <div style={{ background:'var(--card-bg)', borderRadius:16, padding:24, textAlign:'center', boxShadow:'var(--shadow-sm)', marginBottom:20 }}>
           <div style={{ marginBottom:16 }}>
-            {profile.photoURL ? <img src={profile.photoURL} alt={profile.name} style={{ width:100, height:100, borderRadius:'50%', objectFit:'cover', border:'4px solid var(--primary)' }} onError={(e)=>{ e.currentTarget.src='/splash_screen/avatar_fallback.png'; }} /> : <div style={{ width:100, height:100, borderRadius:'50%', background:'linear-gradient(135deg,var(--primary),var(--accent))', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:40, fontWeight:700 }}>{getInitials(profile.name)}</div>}
+            <AvatarCircle
+              src={profile.photoURL}
+              alt={profile.name}
+              size={100}
+              style={{ border: '4px solid var(--primary)' }}
+            />
           </div>
 
           <h1 style={{ fontSize:24, fontWeight:700, margin:'0 0 4px 0', color:'var(--text-primary)' }}>{profile.name}</h1>

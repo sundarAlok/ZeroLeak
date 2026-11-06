@@ -1,41 +1,62 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase/firebase';
-import { collection, getDoc, doc, getDocs, query, where, addDoc, serverTimestamp, limit } from 'firebase/firestore';
+import { collection, getDoc, doc, getDocs, query, where, addDoc, serverTimestamp, limit, onSnapshot } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import '../../components/styles/common.css';
 
 const Favorites = () => {
   const { user } = useAuth();
   const [favUsers, setFavUsers] = useState([]);
+  const [favoriteIds, setFavoriteIds] = useState([]);
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const favoriteIdsKey = favoriteIds.join('|');
 
   useEffect(() => {
     if (!user) return;
-    let mounted = true;
-    (async () => {
-      setLoading(true);
-      try {
-        const ud = await getDoc(doc(db, 'users', user.uid));
-        const favs = (ud.exists() && ud.data().favorites) || [];
-        if (favs.length === 0) {
-          if (mounted) setFavUsers([]);
-          return;
-        }
-        const usersSnapPromises = favs.map(id => getDoc(doc(db, 'publicProfiles', id)).catch(() => null));
-        const results = await Promise.all(usersSnapPromises);
-        const users = results.filter(r=>r && r.exists()).map(r=>({ id: r.id, ...r.data() }));
-        if (mounted) setFavUsers(users);
-      } catch (err) {
-        console.error('Failed to load favorites', err);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => { mounted = false; };
+    setLoading(true);
+    return onSnapshot(doc(db, 'users', user.uid), snapshot => {
+      setFavoriteIds(snapshot.exists() ? snapshot.data().favorites || [] : []);
+    }, err => {
+      console.error('Failed to subscribe to favorite IDs:', err);
+      setLoading(false);
+    });
   }, [user]);
+
+  useEffect(() => {
+    const ids = favoriteIdsKey ? favoriteIdsKey.split('|') : [];
+    if (ids.length === 0) {
+      setFavUsers([]);
+      setLoading(false);
+      return undefined;
+    }
+
+    setLoading(true);
+    const profiles = new Map();
+    const receivedInitialSnapshot = new Set();
+    const markReceived = id => {
+      receivedInitialSnapshot.add(id);
+      if (receivedInitialSnapshot.size === ids.length) setLoading(false);
+    };
+    const unsubscribers = ids.map(id => onSnapshot(
+      doc(db, 'publicProfiles', id),
+      snapshot => {
+        if (snapshot.exists()) profiles.set(id, { id, ...snapshot.data() });
+        else profiles.delete(id);
+        setFavUsers(ids.map(favoriteId => profiles.get(favoriteId)).filter(Boolean));
+        markReceived(id);
+      },
+      err => {
+        console.error(`Failed to subscribe to favorite profile ${id}:`, err);
+        profiles.delete(id);
+        setFavUsers(ids.map(favoriteId => profiles.get(favoriteId)).filter(Boolean));
+        markReceived(id);
+      }
+    ));
+    return () => unsubscribers.forEach(unsubscribe => unsubscribe());
+  }, [favoriteIdsKey]);
 
   const startConversation = async (targetUser) => {
     if (!user || !targetUser) return;

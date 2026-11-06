@@ -1,5 +1,5 @@
 // Chat.js (FULL replacement)
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db, rtdb } from '../../firebase/firebase';
 import { collection, query, getDocs, getDoc, doc, addDoc, updateDoc, onSnapshot, orderBy, serverTimestamp, deleteDoc, where, limit, writeBatch, increment, arrayUnion } from 'firebase/firestore';
@@ -8,7 +8,7 @@ import { ChatCard, UserCard } from '../../components/common/PremiumCards';
 import GroupModal from '../../components/common/GroupModal';
 import SearchBar from '../../components/common/SearchBar';
 import '../../components/styles/common.css';
-import { getCachedConversations, cacheConversations, cacheUser, getCachedUser, getCachedMessages, cacheMessages } from '../../utils/cacheManager';
+import { cacheUser, getCachedUser, getCachedMessages, cacheMessages } from '../../utils/cacheManager';
 import { FiMenu, FiMoreVertical, FiMapPin, FiTrash2, FiLock, FiUnlock, FiMessageCircle, FiSmile, FiUserX } from 'react-icons/fi';
 import { arrayRemove } from 'firebase/firestore';
 import { HiOutlineUserGroup } from 'react-icons/hi2';
@@ -17,6 +17,7 @@ import { LuSendHorizontal } from "react-icons/lu";
 
 const Chat = () => {
   const { user } = useAuth();
+  const currentUserId = user?.uid;
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -43,8 +44,17 @@ const Chat = () => {
   const menuRef = useRef(null);
   // user metadata (favorites, per-user deleted convo timestamps)
   const [userMeta, setUserMeta] = useState({ favorites: [], deletedConversations: {} });
+  const userMetaRef = useRef(userMeta);
+  userMetaRef.current = userMeta;
+  const openRequestIdRef = useRef(0);
   const [favFilter, setFavFilter] = useState('');
   const [activeTab, setActiveTab] = useState('chats');
+
+  useEffect(() => () => {
+    openRequestIdRef.current += 1;
+    msgsUnsubRef.current.messages?.();
+    msgsUnsubRef.current.meta?.();
+  }, []);
 
   // Subscribe to current user's profile metadata (favorites / deletedConversations)
   useEffect(() => {
@@ -77,50 +87,18 @@ const Chat = () => {
     try { return Math.floor((window.innerWidth || 1200) * 0.45); } catch { return 480; }
   };
 
-  // conversations listener - OPTIMIZED: Load from cache FIRST, then sync
+  // Conversations and group metadata stay synchronized with Firestore.
   useEffect(() => {
-    if (!user) return;
-
-    // STEP 1: Load from cache immediately (instant UI)
-    const cachedConvos = getCachedConversations();
-    if (cachedConvos && cachedConvos.length > 0) {
-      // Recompute previews using current user's UID and cached messages so previews remain correct
-      try {
-        const currentUid = user.uid;
-        const adjusted = cachedConvos.map(c => {
-          let lastMessagePreview = c.lastMessagePreview || c.lastMessage || '';
-          try {
-            const cachedMsgs = getCachedMessages(c.id);
-            if (cachedMsgs && cachedMsgs.length > 0) {
-              const lm = cachedMsgs[cachedMsgs.length - 1];
-              let senderName = '';
-              if (lm.senderId === currentUid) {
-                senderName = 'You';
-              } else {
-                // Try to resolve sender's platform name from cache (prefer exact senderId)
-                const senderCached = getCachedUser(lm.senderId) || getCachedUser(c.otherUserId) || {};
-                senderName = senderCached.name || (lm.senderName || '');
-              }
-              const text = (lm.text || lm.message || '').toString();
-              // For 1-on-1 chats we show only the message text; for groups include sender prefix
-              lastMessagePreview = c.isGroup ? (senderName ? `${senderName}: ${text}` : text) : text;
-            }
-          } catch (e) { /* ignore */ }
-          return { ...c, lastMessagePreview };
-        });
-        setConversations(adjusted);
-      } catch (e) {
-        setConversations(cachedConvos);
-      }
-      setLoading(false);
-    } else {
-      setLoading(true);
-    }
+    if (!currentUserId) return;
+    setLoading(true);
+    setConversations([]);
+    setActiveConvo(null);
+    setMessages([]);
 
     // STEP 2: Set up real-time listener to sync in background
     const q = query(
       collection(db, 'conversations'), 
-      where('participants', 'array-contains', user.uid),
+      where('participants', 'array-contains', currentUserId),
       orderBy('lastMessageTime', 'desc'),
       limit(50)
     );
@@ -128,13 +106,11 @@ const Chat = () => {
     const unsub = onSnapshot(q, (snapshot) => {
       try {
         const basicConvos = [];
-        const otherIds = new Set();
-        const currentUid = user.uid; // Capture current user's UID
+        const currentUid = currentUserId;
         
         snapshot.docs.forEach(d => {
           const data = d.data();
           const otherId = data.participants?.find(id => id !== currentUid) || null;
-          if (otherId) otherIds.add(otherId);
           
           basicConvos.push({
             id: d.id,
@@ -146,16 +122,16 @@ const Chat = () => {
             locked: data.locked || false,
             unreadCount: (data.unreadCounts?.[currentUid]) || 0,
             isGroup: !!data.isGroup,
+            groupId: data.groupId || null,
             groupName: data.groupName || null,
             groupPhotoURL: data.groupPhotoURL || null
           });
         });
 
-        // Build conversations with cached user data first
+        // Build conversation previews from the current Firestore snapshot.
         const convosWithCachedData = basicConvos.map(c => {
-          const cachedUserData = getCachedUser(c.otherUserId);
           // check if the current user has deleted this conversation previously
-          const deletedMap = userMeta?.deletedConversations || {};
+          const deletedMap = userMetaRef.current.deletedConversations || {};
           const deletedTs = deletedMap && deletedMap[c.id] ? deletedMap[c.id] : null;
           let deletedAtMs = null;
           try {
@@ -165,42 +141,17 @@ const Chat = () => {
             else if (deletedTs.seconds != null) deletedAtMs = (deletedTs.seconds * 1000) + ((deletedTs.nanoseconds || deletedTs.nanos || 0) / 1e6);
           } catch (e) { deletedAtMs = null; }
 
-          // try to build a preview from cached messages if present and not deleted
-          let lastMessagePreview = '';
-          let lastMessage = '';
-          try {
-            if (!deletedAtMs) {
-              lastMessage = c.lastMessage || '';
-              lastMessagePreview = lastMessage;
-              const cachedMsgs = getCachedMessages(c.id);
-              if (cachedMsgs && cachedMsgs.length > 0) {
-                const lm = cachedMsgs[cachedMsgs.length - 1];
-                // SIMPLE LOGIC: Check if CURRENT user sent this message
-                let senderName = '';
-                if (lm.senderId === currentUid) {
-                  // Current user sent this message
-                  senderName = 'You';
-                } else {
-                  // Other participant sent this message - use their platform name
-                  senderName = (cachedUserData && cachedUserData.name) || '';
-                }
-                const text = (lm.text || lm.message || '').toString();
-                // For 1-on-1 chats we show only the message text; for groups include sender prefix
-                lastMessagePreview = c.isGroup ? (senderName ? `${senderName}: ${text}` : text) : text;
-                lastMessage = lm.text || lm.message || lastMessage;
-              }
-            } else {
-              // user deleted conversation previously - show no old preview
-              lastMessage = '';
-              lastMessagePreview = '';
-            }
-          } catch (e) { /* ignore cache read */ }
+          const timestampMs = c.timestamp?.toMillis?.()
+            || (typeof c.timestamp === 'number' ? c.timestamp : 0);
+          const isDeleted = deletedAtMs != null && (!timestampMs || deletedAtMs >= timestampMs);
+          const lastMessage = isDeleted ? '' : c.lastMessage || '';
+          const lastMessagePreview = lastMessage;
 
-          const isFavourite = (userMeta?.favorites || []).includes(c.otherUserId);
+          const isFavourite = (userMetaRef.current.favorites || []).includes(c.otherUserId);
 
           const userObj = c.isGroup
             ? { id: c.groupId || c.id, name: c.groupName || 'Group', username: '', photoURL: c.groupPhotoURL || '' }
-            : (cachedUserData ? { id: c.otherUserId, ...cachedUserData } : { id: c.otherUserId, name: 'Loading...', username: '', photoURL: '' });
+            : { id: c.otherUserId, name: 'Loading...', username: '', photoURL: '' };
 
           return {
             id: c.id,
@@ -212,6 +163,8 @@ const Chat = () => {
             locked: c.locked,
             unreadCount: c.unreadCount,
             isGroup: c.isGroup,
+            groupId: c.groupId,
+            participants: c.participants,
             participantCount: c.participants.length || 2,
             isFavourite
           };
@@ -228,64 +181,6 @@ const Chat = () => {
         setConversations(convosWithCachedData);
         setLoading(false);
 
-        // Cache conversations for next load
-        cacheConversations(convosWithCachedData);
-
-        // Fetch missing user data in background
-        const missingIds = Array.from(otherIds).filter(id => !getCachedUser(id));
-        if (missingIds.length > 0) {
-          Promise.all(
-            missingIds.map(id => 
-              getDoc(doc(db, 'publicProfiles', id))
-                .then(d => {
-                  if (d.exists()) {
-                    cacheUser(id, d.data()); // Cache for future use
-                    return { id, data: d.data() };
-                  }
-                  return null;
-                })
-                .catch(() => null)
-            )
-          ).then(results => {
-            const userMap = new Map();
-            results.forEach(r => { if (r && r.data) userMap.set(r.id, r.data); });
-            
-            // Update conversations with fresh user data and rebuild previews
-            setConversations(prev => prev.map(c => {
-              if (!userMap.has(c.user.id)) return c;
-              
-              // Get fresh user data
-              const freshUserData = userMap.get(c.user.id);
-              
-              // Rebuild message preview with fresh data
-              let lastMessagePreview = c.lastMessagePreview;
-              try {
-                const cachedMsgs = getCachedMessages(c.id);
-                if (cachedMsgs && cachedMsgs.length > 0) {
-                  const lm = cachedMsgs[cachedMsgs.length - 1];
-                  let senderName = '';
-                  if (lm.senderId === user.uid) {
-                    // Current user sent this message
-                    senderName = 'You';
-                  } else {
-                    // Other participant sent this message
-                    senderName = freshUserData.name || '';
-                  }
-                  const text = (lm.text || lm.message || '').toString();
-                  // For 1-on-1 chats we show only the message text; for groups include sender prefix
-                  lastMessagePreview = c.isGroup ? (senderName ? `${senderName}: ${text}` : text) : text;
-                }
-              } catch (e) { /* ignore */ }
-              
-              return { 
-                ...c, 
-                user: { id: c.user.id, ...freshUserData },
-                lastMessagePreview
-              };
-            }));
-          }).catch(err => console.error('Error fetching user docs:', err));
-        }
-
       } catch (err) {
         console.error('conversation snapshot sync error', err);
         setLoading(false);
@@ -296,7 +191,77 @@ const Chat = () => {
     });
 
     return () => { try { unsub(); } catch(e){} };
-  }, [user, userMeta]);
+  }, [user, currentUserId]);
+
+  const profileSubscriptionIds = [...new Set(
+    conversations.filter(convo => !convo.isGroup && convo.user?.id).map(convo => convo.user.id)
+  )].sort().join('|');
+
+  useEffect(() => {
+    if (!currentUserId || !profileSubscriptionIds) return;
+    const ids = profileSubscriptionIds.split('|');
+    const unsubscribers = ids.map(uid => onSnapshot(
+      doc(db, 'publicProfiles', uid),
+      (snapshot) => {
+        if (!snapshot.exists()) return;
+        const profile = snapshot.data();
+        cacheUser(uid, profile);
+        setConversations(previous => previous.map(convo =>
+          convo.user?.id === uid ? { ...convo, user: { id: uid, ...profile } } : convo
+        ));
+        setActiveConvo(previous =>
+          previous?.user?.id === uid ? { ...previous, user: { id: uid, ...profile } } : previous
+        );
+      },
+      error => console.error(`Public profile listener failed for ${uid}:`, error)
+    ));
+    return () => unsubscribers.forEach(unsubscribe => unsubscribe());
+  }, [user, currentUserId, profileSubscriptionIds]);
+
+  const groupSubscriptionIds = [...new Set(
+    conversations.filter(convo => convo.isGroup && convo.groupId).map(convo => convo.groupId)
+  )].sort().join('|');
+
+  useEffect(() => {
+    if (!currentUserId || !groupSubscriptionIds) return;
+    const ids = groupSubscriptionIds.split('|');
+    const unsubscribers = ids.map(groupId => onSnapshot(
+      doc(db, 'groups', groupId),
+      snapshot => {
+        if (!snapshot.exists()) return;
+        const group = snapshot.data();
+        setConversations(previous => previous.map(convo =>
+          convo.groupId === groupId
+            ? {
+                ...convo,
+                participants: group.members || convo.participants,
+                participantCount: group.members?.length || convo.participantCount,
+                user: { ...convo.user, name: group.name || convo.user?.name, photoURL: group.photoURL || '' }
+              }
+            : convo
+        ));
+        setActiveConvo(previous =>
+          previous?.groupId === groupId
+            ? {
+                ...previous,
+                participants: group.members || previous.participants,
+                user: { ...previous.user, name: group.name || previous.user?.name, photoURL: group.photoURL || '' }
+              }
+            : previous
+        );
+      },
+      error => console.error(`Group listener failed for ${groupId}:`, error)
+    ));
+    return () => unsubscribers.forEach(unsubscribe => unsubscribe());
+  }, [user, currentUserId, groupSubscriptionIds]);
+
+  const favoriteIds = useMemo(() => userMeta.favorites || [], [userMeta.favorites]);
+  useEffect(() => {
+    setConversations(previous => previous.map(convo => ({
+      ...convo,
+      isFavourite: favoriteIds.includes(convo.user?.id)
+    })));
+  }, [favoriteIds]);
 
   // presence publish / delivered best-effort
   useEffect(() => {
@@ -481,6 +446,10 @@ const Chat = () => {
   // openConversation - reliable (fetch meta, user data, subscribe messages)
   const openConversation = useCallback(async (convo) => {
     if (!convo || !convo.id) return;
+    const requestId = ++openRequestIdRef.current;
+    msgsUnsubRef.current.messages?.();
+    msgsUnsubRef.current.meta?.();
+    msgsUnsubRef.current = { messages: null, meta: null };
 
     try {
       let meta = {};
@@ -488,6 +457,7 @@ const Chat = () => {
         const cd = await getDoc(doc(db, 'conversations', convo.id));
         if (cd.exists()) meta = cd.data();
       } catch (err) { /* ignore */ }
+      if (requestId !== openRequestIdRef.current) return;
 
       // ensure other user's profile is present
       let userInfo = convo.user;
@@ -515,6 +485,7 @@ const Chat = () => {
         locked: meta.locked || convo.locked || false,
         lockSalt: meta.lockSalt || convo.lockSalt || null,
         isGroup: meta.isGroup || false,
+        groupId: meta.groupId || convo.groupId || null,
         participants: meta.participants || []
       };
 
@@ -523,7 +494,7 @@ const Chat = () => {
         const missingUsernames = built.participants.filter(pid => !getCachedUser(pid)?.username);
         if (missingUsernames.length > 0) {
           try {
-            const userDocs = await Promise.all(missingUsernames.map(pid => getDoc(doc(db, 'users', pid))));
+            const userDocs = await Promise.all(missingUsernames.map(pid => getDoc(doc(db, 'publicProfiles', pid))));
             userDocs.forEach((doc, idx) => {
               if (doc.exists()) {
                 cacheUser(missingUsernames[idx], doc.data());
@@ -536,8 +507,9 @@ const Chat = () => {
           }
         }
       }
+      if (requestId !== openRequestIdRef.current) return;
 
-      setActiveConvo(prev => (prev && prev.id === built.id) ? prev : built);
+      setActiveConvo(built);
 
       // mobile behavior: hide sidebar after setting activeConvo (give render a tick)
       setTimeout(() => { if (isMobile) setShowSidebar(false); }, 60);
@@ -554,6 +526,7 @@ const Chat = () => {
       // attempt delivered/read marking
       await markMessagesDelivered(built.id);
       await markMessagesRead(built.id);
+      if (requestId !== openRequestIdRef.current) return;
 
       // subscribe to messages
       try {
@@ -565,6 +538,7 @@ const Chat = () => {
 
         const q = query(collection(db, 'conversations', built.id, 'messages'), orderBy('timestamp', 'asc'));
         const unsubMsgs = onSnapshot(q, (snapshot) => {
+          if (requestId !== openRequestIdRef.current) return;
           const msgs = snapshot.docs.map(d => {
             const data = d.data() || {};
             // normalize timestamp to milliseconds (prefer server timestamp, fallback to clientTimestamp)
@@ -587,9 +561,21 @@ const Chat = () => {
         msgsUnsubRef.current.messages = unsubMsgs;
 
         const unsubMeta = onSnapshot(doc(db, 'conversations', built.id), (d) => {
+          if (requestId !== openRequestIdRef.current) return;
           if (!d.exists()) return;
           const data = d.data();
-          setActiveConvo(prev => prev ? ({ ...prev, pinned: data.pinned || false, blockedBy: data.blockedBy || null, locked: data.locked || false, lockSalt: data.lockSalt || null }) : prev);
+          setActiveConvo(prev => prev?.id === built.id
+            ? ({
+                ...prev,
+                pinned: data.pinned || false,
+                blockedBy: data.blockedBy || null,
+                locked: data.locked || false,
+                lockSalt: data.lockSalt || null,
+                isGroup: !!data.isGroup,
+                groupId: data.groupId || null,
+                participants: data.participants || []
+              })
+            : prev);
         }, (err) => console.error('meta onSnapshot error', err));
         msgsUnsubRef.current.meta = unsubMeta;
       } catch (err) {
