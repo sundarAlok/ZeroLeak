@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db, rtdb } from '../../firebase/firebase';
-import { collection, query, getDocs, getDoc, doc, addDoc, updateDoc, onSnapshot, orderBy, serverTimestamp, deleteDoc, where, limit, writeBatch, increment, arrayUnion } from 'firebase/firestore';
-import { ref as rtdbRef, onDisconnect, onValue, set as rtdbSet, serverTimestamp as rtdbServerTimestamp, get as rtdbGet } from 'firebase/database';
+import { collection, query, getDocs, getDoc, doc, updateDoc, onSnapshot, orderBy, serverTimestamp, deleteDoc, where, limit, writeBatch, arrayUnion, runTransaction } from 'firebase/firestore';
+import { ref as rtdbRef, onDisconnect, set as rtdbSet, serverTimestamp as rtdbServerTimestamp } from 'firebase/database';
 import { ChatCard, UserCard } from '../../components/common/PremiumCards';
 import GroupModal from '../../components/common/GroupModal';
 import SearchBar from '../../components/common/SearchBar';
@@ -14,6 +14,7 @@ import { arrayRemove } from 'firebase/firestore';
 import { HiOutlineUserGroup } from 'react-icons/hi2';
 import { BsBookmarkHeart, BsEmojiLaughing } from 'react-icons/bs';
 import { LuSendHorizontal } from "react-icons/lu";
+import { getOrCreateDirectConversation } from '../../firebase/conversations';
 
 const Chat = () => {
   const { user } = useAuth();
@@ -21,6 +22,7 @@ const Chat = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [conversations, setConversations] = useState([]);
+  const [profilesById, setProfilesById] = useState({});
   const [messages, setMessages] = useState([]);
   const messagesEndRef = useRef(null);
   const [loading, setLoading] = useState(false);
@@ -98,9 +100,7 @@ const Chat = () => {
     // STEP 2: Set up real-time listener to sync in background
     const q = query(
       collection(db, 'conversations'), 
-      where('participants', 'array-contains', currentUserId),
-      orderBy('lastMessageTime', 'desc'),
-      limit(50)
+      where('participants', 'array-contains', currentUserId)
     );
     
     const unsub = onSnapshot(q, (snapshot) => {
@@ -119,7 +119,9 @@ const Chat = () => {
             lastMessage: data.lastMessage || '',
             timestamp: data.lastMessageTime,
             pinned: data.pinned || false,
+            blockedBy: data.blockedBy || null,
             locked: data.locked || false,
+            lockSalt: data.lockSalt || null,
             unreadCount: (data.unreadCounts?.[currentUid]) || 0,
             isGroup: !!data.isGroup,
             groupId: data.groupId || null,
@@ -127,6 +129,17 @@ const Chat = () => {
             groupPhotoURL: data.groupPhotoURL || null
           });
         });
+
+        const cachedProfiles = {};
+        basicConvos.forEach(convo => {
+          if (convo.otherUserId) {
+            const cachedProfile = getCachedUser(convo.otherUserId);
+            if (cachedProfile) cachedProfiles[convo.otherUserId] = cachedProfile;
+          }
+        });
+        if (Object.keys(cachedProfiles).length) {
+          setProfilesById(previous => ({ ...previous, ...cachedProfiles }));
+        }
 
         // Build conversation previews from the current Firestore snapshot.
         const convosWithCachedData = basicConvos.map(c => {
@@ -149,9 +162,15 @@ const Chat = () => {
 
           const isFavourite = (userMetaRef.current.favorites || []).includes(c.otherUserId);
 
+          const cachedProfile = c.otherUserId ? getCachedUser(c.otherUserId) : null;
           const userObj = c.isGroup
             ? { id: c.groupId || c.id, name: c.groupName || 'Group', username: '', photoURL: c.groupPhotoURL || '' }
-            : { id: c.otherUserId, name: 'Loading...', username: '', photoURL: '' };
+            : {
+                id: c.otherUserId,
+                name: cachedProfile?.name || cachedProfile?.username || 'Unknown user',
+                username: cachedProfile?.username || '',
+                photoURL: cachedProfile?.photoURL || ''
+              };
 
           return {
             id: c.id,
@@ -178,7 +197,7 @@ const Chat = () => {
           return tb - ta;
         });
 
-        setConversations(convosWithCachedData);
+        setConversations(convosWithCachedData.slice(0, 50));
         setLoading(false);
 
       } catch (err) {
@@ -194,7 +213,7 @@ const Chat = () => {
   }, [user, currentUserId]);
 
   const profileSubscriptionIds = [...new Set(
-    conversations.filter(convo => !convo.isGroup && convo.user?.id).map(convo => convo.user.id)
+    conversations.flatMap(convo => convo.participants || []).filter(uid => uid && uid !== currentUserId)
   )].sort().join('|');
 
   useEffect(() => {
@@ -203,14 +222,27 @@ const Chat = () => {
     const unsubscribers = ids.map(uid => onSnapshot(
       doc(db, 'publicProfiles', uid),
       (snapshot) => {
-        if (!snapshot.exists()) return;
+        if (!snapshot.exists()) {
+          setProfilesById(previous => {
+            if (!previous[uid]) return previous;
+            const next = { ...previous };
+            delete next[uid];
+            return next;
+          });
+          return;
+        }
         const profile = snapshot.data();
         cacheUser(uid, profile);
+        setProfilesById(previous => ({ ...previous, [uid]: profile }));
         setConversations(previous => previous.map(convo =>
-          convo.user?.id === uid ? { ...convo, user: { id: uid, ...profile } } : convo
+          convo.user?.id === uid && !convo.isGroup
+            ? { ...convo, user: { id: uid, ...profile } }
+            : convo
         ));
         setActiveConvo(previous =>
-          previous?.user?.id === uid ? { ...previous, user: { id: uid, ...profile } } : previous
+          previous?.user?.id === uid && !previous.isGroup
+            ? { ...previous, user: { id: uid, ...profile } }
+            : previous
         );
       },
       error => console.error(`Public profile listener failed for ${uid}:`, error)
@@ -263,7 +295,7 @@ const Chat = () => {
     })));
   }, [favoriteIds]);
 
-  // presence publish / delivered best-effort
+  // Publish this user's presence without subscribing to unrelated presence records.
   useEffect(() => {
     if (!user || !rtdb) return;
     const statusRef = rtdbRef(rtdb, `status/${user.uid}`);
@@ -272,25 +304,10 @@ const Chat = () => {
       onDisconnect(statusRef).set({ state: 'offline', lastChanged: rtdbServerTimestamp() });
     } catch (err) { console.warn('presence set failed', err); }
 
-    const allStatusRef = rtdbRef(rtdb, 'status');
-    const off = onValue(allStatusRef, (snap) => {
-      const data = snap.val() || {};
-      conversations.forEach(c => {
-        const otherId = c.user?.id;
-        if (!otherId) return;
-        const st = data[otherId];
-        if (st && st.state === 'online') {
-          // best-effort mark delivered for messages in this convo
-          // (we rely on each client marking delivered when they load messages)
-        }
-      });
-    });
-
     return () => {
       try { rtdbSet(statusRef, { state: 'offline', lastChanged: rtdbServerTimestamp() }); } catch (e){}
-      try { off && off(); } catch (e) {}
     };
-  }, [user, conversations]);
+  }, [user]);
 
   // window size -> mobile detection
   useEffect(() => {
@@ -452,61 +469,34 @@ const Chat = () => {
     msgsUnsubRef.current = { messages: null, meta: null };
 
     try {
-      let meta = {};
-      try {
-        const cd = await getDoc(doc(db, 'conversations', convo.id));
-        if (cd.exists()) meta = cd.data();
-      } catch (err) { /* ignore */ }
-      if (requestId !== openRequestIdRef.current) return;
-
-      // ensure other user's profile is present
       let userInfo = convo.user;
-      try {
-        if (!userInfo || !userInfo.id || !userInfo.name) {
-          const participants = (meta && meta.participants) || convo.participants || [];
-          const otherId = participants.find(id => id !== user.uid) || (convo.user && convo.user.id) || null;
-          if (otherId) {
-            const ud = await getDoc(doc(db, 'publicProfiles', otherId));
-            if (ud.exists()) userInfo = { id: otherId, ...ud.data() };
-            else userInfo = { id: otherId, name: 'Unknown', username: '', photoURL: '' };
-          }
+      if (!userInfo || !userInfo.id || userInfo.name === 'Unknown user' || userInfo.name === 'Loading...') {
+        const otherId = (convo.participants || []).find(id => id !== user.uid) || userInfo?.id;
+        const cachedProfile = otherId && getCachedUser(otherId);
+        if (cachedProfile) {
+          userInfo = { id: otherId, ...cachedProfile };
+        } else if (otherId) {
+          userInfo = { id: otherId, name: 'Unknown user', username: '', photoURL: '' };
         }
-      } catch (err) {
-        console.warn('Failed to fetch other user for convo', convo.id, err);
       }
 
       const built = {
         id: convo.id,
         user: userInfo || { id: null, name: 'Unknown', username: '', photoURL: '' },
-        lastMessage: meta.lastMessage || convo.lastMessage || '',
-        timestamp: meta.lastMessageTime || convo.timestamp || null,
-        pinned: meta.pinned || convo.pinned || false,
-        blockedBy: meta.blockedBy || convo.blockedBy || null,
-        locked: meta.locked || convo.locked || false,
-        lockSalt: meta.lockSalt || convo.lockSalt || null,
-        isGroup: meta.isGroup || false,
-        groupId: meta.groupId || convo.groupId || null,
-        participants: meta.participants || []
+        lastMessage: convo.lastMessage || '',
+        timestamp: convo.timestamp || null,
+        unreadCount: convo.unreadCount || 0,
+        pinned: convo.pinned || false,
+        blockedBy: convo.blockedBy || null,
+        locked: convo.locked || false,
+        lockSalt: convo.lockSalt || null,
+        isGroup: !!convo.isGroup,
+        groupId: convo.groupId || null,
+        groupName: convo.groupName || null,
+        groupPhotoURL: convo.groupPhotoURL || null,
+        participants: convo.participants || []
       };
 
-      // For groups, fetch participant usernames if not cached
-      if (built.isGroup && built.participants.length > 0) {
-        const missingUsernames = built.participants.filter(pid => !getCachedUser(pid)?.username);
-        if (missingUsernames.length > 0) {
-          try {
-            const userDocs = await Promise.all(missingUsernames.map(pid => getDoc(doc(db, 'publicProfiles', pid))));
-            userDocs.forEach((doc, idx) => {
-              if (doc.exists()) {
-                cacheUser(missingUsernames[idx], doc.data());
-              }
-            });
-            // Trigger re-render to show fetched usernames
-            setActiveConvo(prev => ({ ...prev }));
-          } catch (err) {
-            console.warn('Failed to fetch participant usernames for group', err);
-          }
-        }
-      }
       if (requestId !== openRequestIdRef.current) return;
 
       setActiveConvo(built);
@@ -522,11 +512,6 @@ const Chat = () => {
           setTimeout(() => { try { messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' }); } catch(e){} }, 20);
         }
       } catch (e) { /* ignore cache errors */ }
-
-      // attempt delivered/read marking
-      await markMessagesDelivered(built.id);
-      await markMessagesRead(built.id);
-      if (requestId !== openRequestIdRef.current) return;
 
       // subscribe to messages
       try {
@@ -567,17 +552,25 @@ const Chat = () => {
           setActiveConvo(prev => prev?.id === built.id
             ? ({
                 ...prev,
+                lastMessage: data.lastMessage || '',
+                timestamp: data.lastMessageTime || null,
+                unreadCount: data.unreadCounts?.[user.uid] || 0,
                 pinned: data.pinned || false,
                 blockedBy: data.blockedBy || null,
                 locked: data.locked || false,
                 lockSalt: data.lockSalt || null,
                 isGroup: !!data.isGroup,
                 groupId: data.groupId || null,
+                groupName: data.groupName || null,
+                groupPhotoURL: data.groupPhotoURL || null,
                 participants: data.participants || []
               })
             : prev);
         }, (err) => console.error('meta onSnapshot error', err));
         msgsUnsubRef.current.meta = unsubMeta;
+
+        markMessagesDelivered(built.id).catch(err => console.error('Failed to mark messages delivered:', err));
+        markMessagesRead(built.id).catch(err => console.error('Failed to mark messages read:', err));
       } catch (err) {
         console.error('Failed to subscribe to messages/meta:', err);
       }
@@ -623,6 +616,23 @@ const Chat = () => {
     }
   }, [openConversation, activeConvo, user]);
 
+  useEffect(() => {
+    let pendingConversationId;
+    try {
+      pendingConversationId = localStorage.getItem('zl_open_convo');
+    } catch (err) {
+      console.warn('Unable to read pending conversation:', err);
+      return;
+    }
+
+    if (!pendingConversationId) return;
+    const pendingConversation = conversations.find(convo => convo.id === pendingConversationId);
+    if (!pendingConversation) return;
+
+    localStorage.removeItem('zl_open_convo');
+    handleCardClick(pendingConversation);
+  }, [conversations, handleCardClick]);
+
   // search users (debounced inside effect)
   useEffect(() => {
     const perform = async () => {
@@ -665,63 +675,26 @@ const Chat = () => {
 
   const startConversation = async (targetUser) => {
     try {
-      // find existing conversation for both participants
-      // Query only conversations where the current user is a participant
-      // (reading the entire collection will fail Firestore rules if many docs are not readable)
-      const q = query(collection(db, 'conversations'), where('participants', 'array-contains', user.uid));
-      const allConvosSnap = await getDocs(q);
-      let existingConvoId = null;
-      for (const d of allConvosSnap.docs) {
-        const data = d.data();
-        if (data.participants?.includes(targetUser.id)) { existingConvoId = d.id; break; }
-      }
-      if (!existingConvoId) {
-        const unreadCounts = {}; unreadCounts[user.uid] = 0; unreadCounts[targetUser.id] = 0;
-        const newConvo = await addDoc(collection(db, 'conversations'), {
-          participants: [user.uid, targetUser.id],
-          lastMessage: '',
-          lastMessageTime: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          pinned: false,
-          blockedBy: null,
-          locked: false,
-          unreadCounts
-        });
-        existingConvoId = newConvo.id;
-      }
+      const existingConvoId = await getOrCreateDirectConversation(db, user.uid, targetUser.id);
+      const convo = conversations.find(c => c.id === existingConvoId) || {
+        id: existingConvoId,
+        user: targetUser,
+        participants: [user.uid, targetUser.id],
+        lastMessage: '',
+        timestamp: null,
+        unreadCount: 0,
+        pinned: false,
+        blockedBy: null,
+        locked: false,
+        isGroup: false
+      };
 
-      // fetch metadata
-      let convo = conversations.find(c => c.id === existingConvoId);
-      try {
-        const cd = await getDoc(doc(db, 'conversations', existingConvoId));
-        if (cd.exists()) {
-          const data = cd.data();
-          convo = convo || {};
-          convo = {
-            id: existingConvoId,
-            user: targetUser,
-            lastMessage: data.lastMessage || '',
-            timestamp: data.lastMessageTime,
-            pinned: data.pinned || false,
-            blockedBy: data.blockedBy || null,
-            locked: data.locked || false,
-            lockSalt: data.lockSalt || null
-          };
-        }
-      } catch (err) { console.warn('Failed to fetch convo metadata', err); }
-
-      // open conversation reliably
-      try {
-        await openConversation(convo);
-      } catch (err) {
-        console.warn('openConversation after startConversation failed', err);
-        setActiveConvo(convo);
-      }
+      await openConversation(convo);
 
       setSearchQuery(''); setSearchResults([]);
     } catch (err) {
       console.error('Error starting conversation:', err);
-      alert('Failed to start conversation');
+      alert(`Failed to start conversation: ${err.message || 'Unknown error'}`);
     }
   };
 
@@ -733,46 +706,42 @@ const Chat = () => {
 
     try {
       const clientTs = Date.now();
-      const msgRef = await addDoc(collection(db, 'conversations', activeConvo.id, 'messages'), {
-        senderId: user.uid,
-        senderName: user.displayName || '',
-        text: newMessage.trim(),
-        readBy: [user.uid],
-        deliveredTo: [],
-        timestamp: serverTimestamp(),
-        clientTimestamp: clientTs
+      const text = newMessage.trim();
+      const convoRef = doc(db, 'conversations', activeConvo.id);
+      const messageRef = doc(collection(db, 'conversations', activeConvo.id, 'messages'));
+      await runTransaction(db, async transaction => {
+        const convoSnapshot = await transaction.get(convoRef);
+        if (!convoSnapshot.exists()) {
+          throw new Error('This conversation no longer exists.');
+        }
+
+        const conversation = convoSnapshot.data();
+        if (!conversation.participants?.includes(user.uid)) {
+          throw new Error('You are no longer a participant in this conversation.');
+        }
+
+        const unreadCounts = { ...(conversation.unreadCounts || {}) };
+        conversation.participants.forEach(participantId => {
+          if (participantId !== user.uid) {
+            unreadCounts[participantId] = (unreadCounts[participantId] || 0) + 1;
+          }
+        });
+
+        transaction.set(messageRef, {
+          senderId: user.uid,
+          senderName: user.displayName || '',
+          text,
+          readBy: [user.uid],
+          deliveredTo: [],
+          timestamp: serverTimestamp(),
+          clientTimestamp: clientTs
+        });
+        transaction.update(convoRef, {
+          lastMessage: text,
+          lastMessageTime: serverTimestamp(),
+          unreadCounts
+        });
       });
-
-      // mark delivered for online participants (best-effort)
-      try {
-        const convoDoc = await getDoc(doc(db, 'conversations', activeConvo.id));
-        const participants = (convoDoc.exists() && convoDoc.data().participants) || [];
-        for (const pid of participants) {
-          if (pid === user.uid) continue;
-          try {
-            const snap = await rtdbGet(rtdbRef(rtdb, `status/${pid}`));
-            const val = snap && typeof snap.val === 'function' ? snap.val() : (snap && snap.val ? snap.val() : snap);
-            if (val && val.state === 'online') {
-              await updateDoc(doc(db, 'conversations', activeConvo.id, 'messages', msgRef.id), { deliveredTo: arrayUnion(pid) });
-            }
-          } catch (inner) { /* ignore presence check failures */ }
-        }
-      } catch (innerErr) { /* ignore presence logic errors */ }
-
-      // update convo's last message and unread counts
-      try {
-        const convoRef = doc(db, 'conversations', activeConvo.id);
-        try {
-          const cd = await getDoc(convoRef);
-          const participants = (cd.exists() && cd.data().participants) || [];
-          const updates = { lastMessage: newMessage.trim(), lastMessageTime: serverTimestamp() };
-          participants.forEach(pid => { if (pid !== user.uid) updates[`unreadCounts.${pid}`] = increment(1); });
-          await updateDoc(convoRef, updates);
-        } catch (innerErr) {
-          await updateDoc(convoRef, { lastMessage: newMessage.trim(), lastMessageTime: serverTimestamp() });
-        }
-      } catch (err) { console.warn('Failed to update conversation lastMessage:', err); }
-
       setNewMessage('');
     } catch (err) {
       console.error('Error sending message:', err);
@@ -1078,7 +1047,10 @@ const Chat = () => {
           <p style={{ margin:0, fontSize:12, color:'var(--text-secondary)' }}>
             {activeConvo.isGroup ? (() => {
               const participants = activeConvo.participants || [];
-              const usernames = participants.filter(pid => pid !== user?.uid).map(pid => getCachedUser(pid)?.username || 'unknown');
+              const usernames = participants
+                .filter(pid => pid !== user?.uid)
+                .map(pid => profilesById[pid]?.username || getCachedUser(pid)?.username)
+                .filter(Boolean);
               if (usernames.length > 3) {
                 return usernames.slice(0, 3).join(', ') + '...';
               } else {
@@ -1162,8 +1134,10 @@ const Chat = () => {
                             {/* Header: name (left) + username (right) - only for received messages */}
                             {!isOwn && (
                               <div className="msg-header">
-                                <div className="name">{getCachedUser(msg.senderId)?.name || msg.senderName || 'Unknown'}</div>
-                                <div className="username">@{getCachedUser(msg.senderId)?.username || 'unknown'}</div>
+                                <div className="name">{profilesById[msg.senderId]?.name || getCachedUser(msg.senderId)?.name || msg.senderName || 'Unknown user'}</div>
+                                {(profilesById[msg.senderId]?.username || getCachedUser(msg.senderId)?.username) && (
+                                  <div className="username">@{profilesById[msg.senderId]?.username || getCachedUser(msg.senderId)?.username}</div>
+                                )}
                               </div>
                             )}
                             {/* Message body */}

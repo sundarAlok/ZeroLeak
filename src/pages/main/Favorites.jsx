@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase/firebase';
-import { collection, getDoc, doc, getDocs, query, where, addDoc, serverTimestamp, limit, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import '../../components/styles/common.css';
+import { getOrCreateDirectConversation } from '../../firebase/conversations';
 
 const Favorites = () => {
   const { user } = useAuth();
@@ -61,27 +62,7 @@ const Favorites = () => {
   const startConversation = async (targetUser) => {
     if (!user || !targetUser) return;
     try {
-      // Try to find existing conversation between user and targetUser
-      const q = query(collection(db, 'conversations'), where('participants', 'array-contains', user.uid), limit(500));
-      const snap = await getDocs(q);
-      let existing = null;
-      for (const d of snap.docs) {
-        const data = d.data();
-        if (data.participants?.includes(targetUser.id)) { existing = d.id; break; }
-      }
-      if (!existing) {
-        const r = await addDoc(collection(db, 'conversations'), {
-          participants: [user.uid, targetUser.id],
-          lastMessage: '',
-          lastMessageTime: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          pinned: false,
-          blockedBy: null,
-          locked: false,
-          unreadCounts: { [user.uid]: 0, [targetUser.id]: 0 }
-        });
-        existing = r.id;
-      }
+      const existing = await getOrCreateDirectConversation(db, user.uid, targetUser.id);
 
       // Store a flag to open the convo when Chat mounts
       try { localStorage.setItem('zl_open_convo', existing); } catch(e){}

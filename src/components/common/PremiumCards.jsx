@@ -6,6 +6,7 @@ import { GrFormPin } from 'react-icons/gr';
 
 export const ChatCard = ({ user, lastMessage, lastMessagePreview, timestamp, isActive, onCardClick, onMenuClick, unreadCount = 0, participantCount = 2, pinned = false, participants = [], isGroup = false }) => {
   const [photoError, setPhotoError] = React.useState(false);
+  React.useEffect(() => setPhotoError(false), [user?.photoURL]);
   const getInitials = (name) => (name ? name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2) : '?');
   const getDisplayName = (u) => {
     // Prefer the platform `name` field first (user's chosen name), then fallbacks
@@ -85,6 +86,7 @@ export const ChatCard = ({ user, lastMessage, lastMessagePreview, timestamp, isA
 
 export const UserCard = ({ user, onSelect }) => {
   const [photoError, setPhotoError] = React.useState(false);
+  React.useEffect(() => setPhotoError(false), [user?.photoURL]);
   const initials = user?.name ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2) : '?';
   const displayName = user?.name || user?.displayName || user?.platformName || user?.username || 'Unknown';
   const username = user?.username || '';
