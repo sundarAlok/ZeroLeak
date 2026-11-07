@@ -63,9 +63,43 @@ service cloud.firestore {
                  && request.auth.uid in convo.data.participants;
         }
 
+        function isValidMembershipEvent() {
+          let convo = get(/databases/$(database)/documents/conversations/$(conversationId));
+          let groupPath = /databases/$(database)/documents/groups/$(convo.data.groupId);
+          let group = get(groupPath);
+          let groupAfter = getAfter(groupPath);
+          let targetId = request.resource.data.targetUserId;
+          let action = request.resource.data.membershipAction;
+          return convo.data.isGroup == true
+                 && convo.data.groupId is string
+                 && group != null
+                 && groupAfter != null
+                 && (
+                   request.auth.uid == group.data.ownerId
+                   || request.auth.uid in group.data.admins
+                 )
+                 && request.resource.data.systemType == 'membership'
+                 && action in ['added', 'removed']
+                 && targetId is string
+                 && (
+                   (action == 'added'
+                    && !(targetId in group.data.members)
+                    && targetId in groupAfter.data.members)
+                   || (action == 'removed'
+                       && targetId in group.data.members
+                       && !(targetId in groupAfter.data.members))
+                 )
+                 && getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+                    == groupAfter.data.members;
+        }
+
         allow create: if request.auth != null
                       && request.resource.data.senderId == request.auth.uid
-                      && isParticipant();
+                      && isParticipant()
+                      && (
+                        !('systemType' in request.resource.data)
+                        || isValidMembershipEvent()
+                      );
         allow read: if request.auth != null && isParticipant();
         allow update: if request.auth != null
                       && isParticipant()

@@ -9,7 +9,7 @@ import GroupModal from '../../components/common/GroupModal';
 import SearchBar from '../../components/common/SearchBar';
 import '../../components/styles/common.css';
 import { cacheUser, getCachedUser, getCachedMessages, cacheMessages } from '../../utils/cacheManager';
-import { FiMenu, FiMoreVertical, FiMapPin, FiTrash2, FiLock, FiUnlock, FiMessageCircle, FiSmile, FiUserX, FiArrowLeft, FiX, FiUsers, FiEdit2, FiCheck } from 'react-icons/fi';
+import { FiMenu, FiMoreVertical, FiMapPin, FiTrash2, FiLock, FiUnlock, FiMessageCircle, FiSmile, FiUserX, FiArrowLeft, FiX, FiUsers, FiEdit2, FiCheck, FiPlus } from 'react-icons/fi';
 import { arrayRemove } from 'firebase/firestore';
 import { HiOutlineUserGroup } from 'react-icons/hi2';
 import { BsBookmarkHeart, BsEmojiLaughing } from 'react-icons/bs';
@@ -17,6 +17,7 @@ import { LuSendHorizontal } from "react-icons/lu";
 import { getOrCreateDirectConversation } from '../../firebase/conversations';
 import AvatarCircle from '../../components/common/AvatarCircle';
 import UrlFields from '../../components/common/UrlFields';
+import VideoMessage from '../../components/common/VideoMessage';
 
 const Chat = () => {
   const { user } = useAuth();
@@ -35,9 +36,15 @@ const Chat = () => {
   const [groupInfo, setGroupInfo] = useState(null);
   const [groupInfoLoading, setGroupInfoLoading] = useState(false);
   const [groupInfoEditing, setGroupInfoEditing] = useState(false);
-  const [groupInfoDraft, setGroupInfoDraft] = useState({ bio:'', urls:[''] });
+  const [groupInfoDraft, setGroupInfoDraft] = useState({ name:'', photoURL:'', bio:'', urls:[''] });
   const [savingGroupInfo, setSavingGroupInfo] = useState(false);
   const [memberActionFor, setMemberActionFor] = useState(null);
+  const [showAddMembers, setShowAddMembers] = useState(false);
+  const [addMemberQuery, setAddMemberQuery] = useState('');
+  const [addMemberResults, setAddMemberResults] = useState([]);
+  const [loadingMemberSearch, setLoadingMemberSearch] = useState(false);
+  const [addingMemberId, setAddingMemberId] = useState(null);
+  const groupInfoEditingRef = useRef(false);
   const [newMessage, setNewMessage] = useState('');
   const [groupOpen, setGroupOpen] = useState(false);
   const [menuState, setMenuState] = useState({ open: false, x: 0, y: 0, convoId: null });
@@ -62,6 +69,7 @@ const Chat = () => {
   const openRequestIdRef = useRef(0);
   const [favFilter, setFavFilter] = useState('');
   const [activeTab, setActiveTab] = useState('chats');
+  groupInfoEditingRef.current = groupInfoEditing;
 
   useEffect(() => {
     if (!showProfilePhoto && !showConversationInfo) return undefined;
@@ -87,10 +95,14 @@ const Chat = () => {
       snapshot => {
         const data = snapshot.exists() ? snapshot.data() : null;
         setGroupInfo(data);
-        setGroupInfoDraft({
-          bio: data?.bio || 'We are using ZeroLeak',
-          urls: data?.urls?.length ? data.urls : ['']
-        });
+        if (!groupInfoEditingRef.current) {
+          setGroupInfoDraft({
+            name:data?.name || activeConvo.groupName || '',
+            photoURL:data?.photoURL || activeConvo.groupPhotoURL || '',
+            bio:data?.bio || 'We are using ZeroLeak',
+            urls:data?.urls?.length ? data.urls : ['']
+          });
+        }
         setGroupInfoLoading(false);
       },
       error => {
@@ -98,7 +110,48 @@ const Chat = () => {
         setGroupInfoLoading(false);
       }
     );
-  }, [showConversationInfo, activeConvo?.isGroup, activeConvo?.groupId]);
+  }, [showConversationInfo, activeConvo?.isGroup, activeConvo?.groupId, activeConvo?.groupName, activeConvo?.groupPhotoURL]);
+
+  useEffect(() => {
+    if (!showAddMembers || !activeConvo?.groupId || addMemberQuery.trim().length < 2) {
+      setAddMemberResults([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setLoadingMemberSearch(true);
+    const timeout = setTimeout(async () => {
+      try {
+        const snapshot = await getDocs(collection(db, 'publicProfiles'));
+        if (cancelled) return;
+        const queryText = addMemberQuery.trim().toLowerCase();
+        const currentMembers = new Set(groupInfo?.members || activeConvo.participants || []);
+        const blockedMembers = new Set(groupInfo?.blockedMembers || []);
+        setAddMemberResults(snapshot.docs
+          .map(item => ({ id:item.id, ...item.data() }))
+          .filter(profile => profile.id !== user?.uid
+            && !currentMembers.has(profile.id)
+            && !blockedMembers.has(profile.id)
+            && (`${profile.name || ''} ${profile.username || ''}`).toLowerCase().includes(queryText))
+          .slice(0, 15));
+      } catch (error) {
+        console.error('Failed to search group members:', error);
+        if (!cancelled) setAddMemberResults([]);
+      } finally {
+        if (!cancelled) setLoadingMemberSearch(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [showAddMembers, addMemberQuery, activeConvo?.groupId, activeConvo?.participants, groupInfo?.members, groupInfo?.blockedMembers, user?.uid]);
+
+  useEffect(() => {
+    setShowAddMembers(false);
+    setAddMemberQuery('');
+    setAddMemberResults([]);
+  }, [showConversationInfo, activeConvo?.groupId]);
 
   const isGroupAdmin = activeConvo?.isGroup && (
     groupInfo?.ownerId === user?.uid
@@ -108,13 +161,21 @@ const Chat = () => {
 
   const saveGroupInfo = async () => {
     if (!activeConvo?.groupId || !isGroupAdmin) return;
+    if (!groupInfoDraft.name.trim()) {
+      window.alert('Group name is required.');
+      return;
+    }
     setSavingGroupInfo(true);
     try {
       const urls = (groupInfoDraft.urls || []).map(url => url.trim()).filter(Boolean).slice(0, 3);
       await runTransaction(db, async transaction => {
         const groupRef = doc(db, 'groups', activeConvo.groupId);
-        const snapshot = await transaction.get(groupRef);
-        if (!snapshot.exists()) throw new Error('Group no longer exists.');
+        const conversationRef = doc(db, 'conversations', activeConvo.id);
+        const [snapshot, conversationSnapshot] = await Promise.all([
+          transaction.get(groupRef),
+          transaction.get(conversationRef)
+        ]);
+        if (!snapshot.exists() || !conversationSnapshot.exists()) throw new Error('Group no longer exists.');
         const current = snapshot.data();
         const admins = current.admins?.length ? current.admins : [current.ownerId];
         if (current.ownerId !== user.uid && !admins.includes(user.uid)) {
@@ -124,8 +185,14 @@ const Chat = () => {
           members:current.members || [],
           admins,
           blockedMembers:current.blockedMembers || [],
+          name:groupInfoDraft.name.trim(),
+          photoURL:groupInfoDraft.photoURL.trim(),
           bio: groupInfoDraft.bio.trim() || 'We are using ZeroLeak',
           urls
+        });
+        transaction.update(conversationRef, {
+          groupName:groupInfoDraft.name.trim(),
+          groupPhotoURL:groupInfoDraft.photoURL.trim()
         });
       });
       setGroupInfoEditing(false);
@@ -134,6 +201,79 @@ const Chat = () => {
       window.alert(error.message || 'Failed to update group details.');
     } finally {
       setSavingGroupInfo(false);
+    }
+  };
+
+  const addGroupMember = async member => {
+    if (!activeConvo?.groupId || !activeConvo?.id || !isGroupAdmin || addingMemberId) return;
+    setAddingMemberId(member.id);
+    try {
+      const groupRef = doc(db, 'groups', activeConvo.groupId);
+      const conversationRef = doc(db, 'conversations', activeConvo.id);
+      const messageRef = doc(collection(db, 'conversations', activeConvo.id, 'messages'));
+      const actorProfile = getCachedUser(user.uid) || {};
+      const actorName = actorProfile.name || user.displayName || 'A group admin';
+      const actorUsername = actorProfile.username || '';
+      const targetName = member.name || member.username || 'A member';
+      const targetUsername = member.username || '';
+      const eventText = `${actorUsername ? `@${actorUsername}` : actorName} added ${targetUsername ? `@${targetUsername}` : targetName} to the group`;
+
+      await runTransaction(db, async transaction => {
+        const [groupSnapshot, conversationSnapshot] = await Promise.all([
+          transaction.get(groupRef),
+          transaction.get(conversationRef)
+        ]);
+        if (!groupSnapshot.exists() || !conversationSnapshot.exists()) throw new Error('The group or its conversation no longer exists.');
+        const group = groupSnapshot.data();
+        const admins = Array.isArray(group.admins) && group.admins.length ? group.admins : [group.ownerId];
+        if (group.ownerId !== user.uid && !admins.includes(user.uid)) throw new Error('Only group admins can add members.');
+        const members = Array.isArray(group.members) ? group.members : [];
+        const blockedMembers = Array.isArray(group.blockedMembers) ? group.blockedMembers : [];
+        if (members.includes(member.id)) throw new Error('This user is already a group member.');
+        if (blockedMembers.includes(member.id)) throw new Error('Unblock this user before adding them.');
+
+        const nextMembers = [...members, member.id];
+        const unreadCounts = { ...(conversationSnapshot.data().unreadCounts || {}) };
+        nextMembers.forEach(participantId => {
+          if (participantId !== user.uid) unreadCounts[participantId] = (unreadCounts[participantId] || 0) + 1;
+        });
+        transaction.update(groupRef, {
+          members:nextMembers,
+          admins,
+          blockedMembers,
+          bio:group.bio || 'We are using ZeroLeak',
+          urls:Array.isArray(group.urls) ? group.urls : []
+        });
+        transaction.update(conversationRef, {
+          participants:nextMembers,
+          participantCount:nextMembers.length,
+          unreadCounts,
+          lastMessage:eventText,
+          lastMessageTime:serverTimestamp()
+        });
+        transaction.set(messageRef, {
+          senderId:user.uid,
+          senderName:actorName,
+          senderUsername:actorUsername,
+          systemType:'membership',
+          membershipAction:'added',
+          targetUserId:member.id,
+          targetName,
+          targetUsername,
+          text:eventText,
+          readBy:[user.uid],
+          deliveredTo:[],
+          timestamp:serverTimestamp(),
+          clientTimestamp:Date.now()
+        });
+      });
+      setAddMemberQuery('');
+      setAddMemberResults([]);
+    } catch (error) {
+      console.error('Failed to add group member:', error);
+      window.alert(error.message || 'Failed to add member to the group.');
+    } finally {
+      setAddingMemberId(null);
     }
   };
 
@@ -149,6 +289,15 @@ const Chat = () => {
     if (!window.confirm(`Are you sure you want to ${actionLabels[action]}?`)) return;
 
     try {
+      const membershipMessageRef = action === 'remove' || action === 'block'
+        ? doc(collection(db, 'conversations', activeConvo.id, 'messages'))
+        : null;
+      const actorProfile = getCachedUser(user.uid) || {};
+      const targetProfile = profilesById[memberId] || getCachedUser(memberId) || {};
+      const actorName = actorProfile.name || user.displayName || 'A group admin';
+      const actorUsername = actorProfile.username || '';
+      const targetName = targetProfile.name || targetProfile.username || 'A member';
+      const targetUsername = targetProfile.username || '';
       await runTransaction(db, async transaction => {
         const groupRef = doc(db, 'groups', activeConvo.groupId);
         const conversationRef = doc(db, 'conversations', activeConvo.id);
@@ -188,6 +337,10 @@ const Chat = () => {
           if (action === 'block' && !blockedMembers.includes(memberId)) blockedMembers.push(memberId);
           const unreadCounts = { ...(conversationSnapshot.data().unreadCounts || {}) };
           delete unreadCounts[memberId];
+          nextMembers.forEach(participantId => {
+            if (participantId !== user.uid) unreadCounts[participantId] = (unreadCounts[participantId] || 0) + 1;
+          });
+          const eventText = `${actorUsername ? `@${actorUsername}` : actorName} removed ${targetUsername ? `@${targetUsername}` : targetName} from the group`;
           transaction.update(groupRef, {
             members:nextMembers,
             blockedMembers,
@@ -198,7 +351,24 @@ const Chat = () => {
           transaction.update(conversationRef, {
             participants:nextMembers,
             participantCount:nextMembers.length,
-            unreadCounts
+            unreadCounts,
+            lastMessage:eventText,
+            lastMessageTime:serverTimestamp()
+          });
+          transaction.set(membershipMessageRef, {
+            senderId:user.uid,
+            senderName:actorName,
+            senderUsername:actorUsername,
+            systemType:'membership',
+            membershipAction:'removed',
+            targetUserId:memberId,
+            targetName,
+            targetUsername,
+            text:eventText,
+            readBy:[user.uid],
+            deliveredTo:[],
+            timestamp:serverTimestamp(),
+            clientTimestamp:Date.now()
           });
           return;
         }
@@ -1325,6 +1495,20 @@ const Chat = () => {
                       const otherId = activeConvo?.user?.id;
                       const readByOther = otherId && msg.readBy && msg.readBy.includes(otherId);
                       const deliveredToOther = otherId && msg.deliveredTo && msg.deliveredTo.includes(otherId);
+                      if (msg.systemType === 'membership') {
+                        const actor = msg.senderUsername ? `@${msg.senderUsername}` : msg.senderName || 'A group admin';
+                        const target = msg.targetUsername ? `@${msg.targetUsername}` : msg.targetName || 'a member';
+                        const actionText = msg.membershipAction === 'added'
+                          ? `${actor} added ${target} to the group`
+                          : `${actor} removed ${target} from the group`;
+                        return (
+                          <div key={msg.id || idx} style={{ display:'flex', justifyContent:'center', margin:'8px 0' }}>
+                            <div style={{ maxWidth:'85%', padding:'7px 14px', borderRadius:14, background:'#f3e8ff', color:'#6b21a8', textAlign:'center', fontSize:12, lineHeight:1.45 }}>
+                              {actionText}
+                            </div>
+                          </div>
+                        );
+                      }
 
                       return (
                         <div key={msg.id || idx} className={`message ${isOwn ? 'own' : 'other'}`} style={{ marginBottom: 8 }}>
@@ -1340,7 +1524,7 @@ const Chat = () => {
                             )}
                             {/* Message body */}
                             <div className="msg-body">
-                              {msg.text}
+                              <VideoMessage text={msg.text || ''} />
                             </div>
                             {/* Footer: time + ticks */}
                             <div className="msg-footer">
@@ -1555,11 +1739,11 @@ const Chat = () => {
               <div style={{ padding:'0 20px 20px' }}>
                 <section style={{ padding:'0 0 16px', marginBottom:18, borderBottom:'1px solid var(--border)' }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
-                    <h4 style={{ margin:0, fontSize:15 }}>Group bio</h4>
+                    <h4 style={{ margin:0, fontSize:15 }}>Group details</h4>
                     {isGroupAdmin && !groupInfoEditing && (
                       <button
                         type="button"
-                        aria-label="Edit group bio"
+                        aria-label="Edit group details"
                         onClick={() => setGroupInfoEditing(true)}
                         style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:34, height:34, border:0, borderRadius:8, background:'var(--hover-bg)', color:'inherit', cursor:'pointer' }}
                       >
@@ -1569,6 +1753,21 @@ const Chat = () => {
                   </div>
                   {groupInfoEditing ? (
                     <div style={{ marginTop:12 }}>
+                      <label className="form-label">Group name</label>
+                      <input
+                        className="form-input"
+                        value={groupInfoDraft.name}
+                        onChange={event => setGroupInfoDraft({ ...groupInfoDraft, name:event.target.value })}
+                        maxLength={80}
+                      />
+                      <label className="form-label" style={{ display:'block', marginTop:12 }}>Group image URL</label>
+                      <input
+                        className="form-input"
+                        type="url"
+                        value={groupInfoDraft.photoURL}
+                        onChange={event => setGroupInfoDraft({ ...groupInfoDraft, photoURL:event.target.value })}
+                        placeholder="https://example.com/image.jpg"
+                      />
                       <label className="form-label">Bio</label>
                       <textarea
                         className="form-input"
@@ -1590,7 +1789,12 @@ const Chat = () => {
                           type="button"
                           className="btn-secondary"
                           onClick={() => {
-                            setGroupInfoDraft({ bio:groupInfo?.bio || 'We are using ZeroLeak', urls:groupInfo?.urls?.length ? groupInfo.urls : [''] });
+                            setGroupInfoDraft({
+                              name:groupInfo?.name || activeConvo.groupName || '',
+                              photoURL:groupInfo?.photoURL || activeConvo.groupPhotoURL || '',
+                              bio:groupInfo?.bio || 'We are using ZeroLeak',
+                              urls:groupInfo?.urls?.length ? groupInfo.urls : ['']
+                            });
                             setGroupInfoEditing(false);
                           }}
                         >
@@ -1603,19 +1807,7 @@ const Chat = () => {
                       <p style={{ margin:'9px 0 0', lineHeight:1.5, whiteSpace:'pre-wrap' }}>
                         {groupInfo?.bio || 'We are using ZeroLeak'}
                       </p>
-                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginTop:16 }}>
-                        <h4 style={{ margin:0, fontSize:15 }}>Links</h4>
-                        {isGroupAdmin && (
-                          <button
-                            type="button"
-                            aria-label="Edit group links"
-                            onClick={() => setGroupInfoEditing(true)}
-                            style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:34, height:34, border:0, borderRadius:8, background:'var(--hover-bg)', color:'inherit', cursor:'pointer' }}
-                          >
-                            <FiEdit2 size={16} />
-                          </button>
-                        )}
-                      </div>
+                      <h4 style={{ margin:'16px 0 0', fontSize:15 }}>Links</h4>
                       {(groupInfo?.urls || []).filter(Boolean).map(url => (
                         <a key={url} href={url} target="_blank" rel="noreferrer" style={{ display:'block', marginTop:8, color:'var(--primary)', overflowWrap:'anywhere' }}>
                           {url}
@@ -1627,10 +1819,54 @@ const Chat = () => {
                     </>
                   )}
                 </section>
-                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10, fontWeight:600 }}>
-                  <FiUsers size={18} />
-                  <span>Members</span>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:10 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, fontWeight:600 }}>
+                    <FiUsers size={18} />
+                    <span>Members</span>
+                  </div>
+                  {isGroupAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddMembers(value => !value)}
+                      style={{ display:'inline-flex', alignItems:'center', gap:5, border:0, borderRadius:8, padding:'6px 10px', background:'var(--hover-bg)', color:'var(--primary)', fontWeight:600, cursor:'pointer' }}
+                    >
+                      <FiPlus size={15} /> Add
+                    </button>
+                  )}
                 </div>
+                {showAddMembers && isGroupAdmin && (
+                  <div style={{ padding:12, marginBottom:12, border:'1px solid var(--border)', borderRadius:12 }}>
+                    <input
+                      className="form-input"
+                      type="search"
+                      value={addMemberQuery}
+                      onChange={event => setAddMemberQuery(event.target.value)}
+                      placeholder="Search by name or username"
+                      aria-label="Search users to add to group"
+                    />
+                    {loadingMemberSearch && <div style={{ padding:10, color:'var(--text-secondary)', fontSize:13 }}>Searching…</div>}
+                    {!loadingMemberSearch && addMemberQuery.trim().length >= 2 && addMemberResults.length === 0 && (
+                      <div style={{ padding:10, color:'var(--text-secondary)', fontSize:13 }}>No available users found.</div>
+                    )}
+                    {addMemberResults.map(member => (
+                      <div key={member.id} style={{ display:'flex', alignItems:'center', gap:9, padding:'9px 0', borderTop:'1px solid var(--border)' }}>
+                        <AvatarCircle src={member.photoURL} alt={member.name || 'User'} size={36} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontWeight:600 }}>{member.name || member.username}</div>
+                          {member.username && <div style={{ fontSize:12, color:'var(--text-secondary)' }}>@{member.username}</div>}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          disabled={addingMemberId === member.id}
+                          onClick={() => addGroupMember(member)}
+                        >
+                          {addingMemberId === member.id ? 'Adding…' : 'Add'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
                   {(groupInfo?.members || activeConvo.participants || []).map(memberId => {
                     const member = profilesById[memberId] || getCachedUser(memberId) || {};
