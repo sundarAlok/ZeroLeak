@@ -3,6 +3,7 @@ import { collection, getDocs, doc, serverTimestamp, writeBatch } from 'firebase/
 import { db } from '../../firebase/firebase';
 import '../styles/common.css';
 import '../styles/modal.css';
+import UrlFields from './UrlFields';
 
 const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
   const [step, setStep] = useState(1);
@@ -11,6 +12,8 @@ const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
   const [selected, setSelected] = useState([]);
   const [groupName, setGroupName] = useState('');
   const [groupPhotoURL, setGroupPhotoURL] = useState('');
+  const [groupBio, setGroupBio] = useState('We are using ZeroLeak');
+  const [groupUrls, setGroupUrls] = useState(['']);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -21,6 +24,8 @@ const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
       setSelected([]);
       setGroupName('');
       setGroupPhotoURL('');
+      setGroupBio('We are using ZeroLeak');
+      setGroupUrls(['']);
     }
   }, [open]);
 
@@ -67,6 +72,10 @@ const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
         photoURL: groupPhotoURL,
         ownerId: currentUser.uid,
         members,
+        admins: [currentUser.uid],
+        blockedMembers: [],
+        bio: groupBio.trim() || 'We are using ZeroLeak',
+        urls: groupUrls.map(url => url.trim()).filter(Boolean).slice(0, 3),
         createdAt: serverTimestamp()
       });
       batch.set(conversationDoc, {
@@ -170,6 +179,14 @@ const GroupModal = ({ open, onClose, currentUser, onGroupCreated }) => {
               onChange={(e) => setGroupName(e.target.value)}
               style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid var(--border)', marginBottom: 12 }}
             />
+            <textarea
+              aria-label="Group bio"
+              placeholder="Group bio"
+              value={groupBio}
+              onChange={event => setGroupBio(event.target.value)}
+              style={{ width:'100%', minHeight:72, padding:10, borderRadius:8, border:'1px solid var(--border)', marginBottom:12, resize:'vertical' }}
+            />
+            <UrlFields urls={groupUrls} onChange={setGroupUrls} maxUrls={3} label="Group links" />
 
             <h4 style={{ margin: '12px 0' }}>Group members</h4>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>

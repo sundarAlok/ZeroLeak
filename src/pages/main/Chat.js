@@ -9,12 +9,14 @@ import GroupModal from '../../components/common/GroupModal';
 import SearchBar from '../../components/common/SearchBar';
 import '../../components/styles/common.css';
 import { cacheUser, getCachedUser, getCachedMessages, cacheMessages } from '../../utils/cacheManager';
-import { FiMenu, FiMoreVertical, FiMapPin, FiTrash2, FiLock, FiUnlock, FiMessageCircle, FiSmile, FiUserX } from 'react-icons/fi';
+import { FiMenu, FiMoreVertical, FiMapPin, FiTrash2, FiLock, FiUnlock, FiMessageCircle, FiSmile, FiUserX, FiArrowLeft, FiX, FiUsers, FiEdit2, FiCheck } from 'react-icons/fi';
 import { arrayRemove } from 'firebase/firestore';
 import { HiOutlineUserGroup } from 'react-icons/hi2';
 import { BsBookmarkHeart, BsEmojiLaughing } from 'react-icons/bs';
 import { LuSendHorizontal } from "react-icons/lu";
 import { getOrCreateDirectConversation } from '../../firebase/conversations';
+import AvatarCircle from '../../components/common/AvatarCircle';
+import UrlFields from '../../components/common/UrlFields';
 
 const Chat = () => {
   const { user } = useAuth();
@@ -27,6 +29,15 @@ const Chat = () => {
   const messagesEndRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [activeConvo, setActiveConvo] = useState(null);
+  const [showProfilePhoto, setShowProfilePhoto] = useState(false);
+  const [profilePhotoDimensions, setProfilePhotoDimensions] = useState(null);
+  const [showConversationInfo, setShowConversationInfo] = useState(false);
+  const [groupInfo, setGroupInfo] = useState(null);
+  const [groupInfoLoading, setGroupInfoLoading] = useState(false);
+  const [groupInfoEditing, setGroupInfoEditing] = useState(false);
+  const [groupInfoDraft, setGroupInfoDraft] = useState({ bio:'', urls:[''] });
+  const [savingGroupInfo, setSavingGroupInfo] = useState(false);
+  const [memberActionFor, setMemberActionFor] = useState(null);
   const [newMessage, setNewMessage] = useState('');
   const [groupOpen, setGroupOpen] = useState(false);
   const [menuState, setMenuState] = useState({ open: false, x: 0, y: 0, convoId: null });
@@ -51,6 +62,174 @@ const Chat = () => {
   const openRequestIdRef = useRef(0);
   const [favFilter, setFavFilter] = useState('');
   const [activeTab, setActiveTab] = useState('chats');
+
+  useEffect(() => {
+    if (!showProfilePhoto && !showConversationInfo) return undefined;
+    const handleKeyDown = event => {
+      if (event.key === 'Escape') {
+        setShowProfilePhoto(false);
+        setShowConversationInfo(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showProfilePhoto, showConversationInfo]);
+
+  useEffect(() => {
+    if (!showConversationInfo || !activeConvo?.isGroup || !activeConvo.groupId) {
+      setGroupInfo(null);
+      return undefined;
+    }
+
+    setGroupInfoLoading(true);
+    return onSnapshot(
+      doc(db, 'groups', activeConvo.groupId),
+      snapshot => {
+        const data = snapshot.exists() ? snapshot.data() : null;
+        setGroupInfo(data);
+        setGroupInfoDraft({
+          bio: data?.bio || 'We are using ZeroLeak',
+          urls: data?.urls?.length ? data.urls : ['']
+        });
+        setGroupInfoLoading(false);
+      },
+      error => {
+        console.error('Failed to load group details:', error);
+        setGroupInfoLoading(false);
+      }
+    );
+  }, [showConversationInfo, activeConvo?.isGroup, activeConvo?.groupId]);
+
+  const isGroupAdmin = activeConvo?.isGroup && (
+    groupInfo?.ownerId === user?.uid
+    || (groupInfo?.admins || []).includes(user?.uid)
+  );
+  const isGroupOwner = activeConvo?.isGroup && groupInfo?.ownerId === user?.uid;
+
+  const saveGroupInfo = async () => {
+    if (!activeConvo?.groupId || !isGroupAdmin) return;
+    setSavingGroupInfo(true);
+    try {
+      const urls = (groupInfoDraft.urls || []).map(url => url.trim()).filter(Boolean).slice(0, 3);
+      await runTransaction(db, async transaction => {
+        const groupRef = doc(db, 'groups', activeConvo.groupId);
+        const snapshot = await transaction.get(groupRef);
+        if (!snapshot.exists()) throw new Error('Group no longer exists.');
+        const current = snapshot.data();
+        const admins = current.admins?.length ? current.admins : [current.ownerId];
+        if (current.ownerId !== user.uid && !admins.includes(user.uid)) {
+          throw new Error('Only group admins can edit group details.');
+        }
+        transaction.update(groupRef, {
+          members:current.members || [],
+          admins,
+          blockedMembers:current.blockedMembers || [],
+          bio: groupInfoDraft.bio.trim() || 'We are using ZeroLeak',
+          urls
+        });
+      });
+      setGroupInfoEditing(false);
+    } catch (error) {
+      console.error('Failed to update group details:', error);
+      window.alert(error.message || 'Failed to update group details.');
+    } finally {
+      setSavingGroupInfo(false);
+    }
+  };
+
+  const handleGroupMemberAction = async (action, memberId) => {
+    if (!activeConvo?.groupId || !activeConvo?.id || !isGroupAdmin) return;
+    const actionLabels = {
+      promote:'make this member an admin',
+      demote:'remove this member as an admin',
+      remove:'remove this member from the group',
+      block:'block and remove this member from the group',
+      unblock:'unblock this member'
+    };
+    if (!window.confirm(`Are you sure you want to ${actionLabels[action]}?`)) return;
+
+    try {
+      await runTransaction(db, async transaction => {
+        const groupRef = doc(db, 'groups', activeConvo.groupId);
+        const conversationRef = doc(db, 'conversations', activeConvo.id);
+        const [groupSnapshot, conversationSnapshot] = await Promise.all([
+          transaction.get(groupRef),
+          transaction.get(conversationRef)
+        ]);
+        if (!groupSnapshot.exists() || !conversationSnapshot.exists()) {
+          throw new Error('The group or its conversation no longer exists.');
+        }
+
+        const group = groupSnapshot.data();
+        const owner = group.ownerId === user.uid;
+        const admins = Array.isArray(group.admins) && group.admins.length ? [...group.admins] : [group.ownerId];
+        const blockedMembers = Array.isArray(group.blockedMembers) ? [...group.blockedMembers] : [];
+        const members = Array.isArray(group.members) ? [...group.members] : [];
+        const groupDefaults = {
+          blockedMembers,
+          bio:group.bio || 'We are using ZeroLeak',
+          urls:Array.isArray(group.urls) ? group.urls : []
+        };
+        if (!owner && !admins.includes(user.uid)) throw new Error('Only group admins can manage members.');
+        if (memberId === group.ownerId) throw new Error('The group creator cannot be changed or removed.');
+
+        if (action === 'promote' || action === 'demote') {
+          if (!owner) throw new Error('Only the group creator can manage admin roles.');
+          if (action === 'promote' && members.includes(memberId) && !admins.includes(memberId)) admins.push(memberId);
+          if (action === 'demote' && admins.includes(memberId)) admins.splice(admins.indexOf(memberId), 1);
+          transaction.update(groupRef, { ...groupDefaults, members, admins });
+          return;
+        }
+
+        if (action === 'remove' || action === 'block') {
+          if (admins.includes(memberId)) throw new Error('Demote this admin before removing them.');
+          const nextMembers = members.filter(id => id !== memberId);
+          if (nextMembers.length === members.length) throw new Error('This user is not a group member.');
+          if (action === 'block' && !blockedMembers.includes(memberId)) blockedMembers.push(memberId);
+          const unreadCounts = { ...(conversationSnapshot.data().unreadCounts || {}) };
+          delete unreadCounts[memberId];
+          transaction.update(groupRef, {
+            members:nextMembers,
+            blockedMembers,
+            bio:groupDefaults.bio,
+            urls:groupDefaults.urls,
+            admins:admins.filter(id => nextMembers.includes(id))
+          });
+          transaction.update(conversationRef, {
+            participants:nextMembers,
+            participantCount:nextMembers.length,
+            unreadCounts
+          });
+          return;
+        }
+
+        if (action === 'unblock') {
+          if (!blockedMembers.includes(memberId)) throw new Error('This user is not blocked.');
+          transaction.update(groupRef, {
+            members,
+            admins,
+            blockedMembers:blockedMembers.filter(id => id !== memberId),
+            bio:groupDefaults.bio,
+            urls:groupDefaults.urls
+          });
+        }
+      });
+      setMemberActionFor(null);
+    } catch (error) {
+      console.error(`Failed to ${action} group member:`, error);
+      window.alert(error.message || 'Failed to update group member.');
+    }
+  };
+
+  const closeActiveConversation = () => {
+    openRequestIdRef.current += 1;
+    msgsUnsubRef.current.messages?.();
+    msgsUnsubRef.current.meta?.();
+    msgsUnsubRef.current = { messages: null, meta: null };
+    setActiveConvo(null);
+    setMessages([]);
+    setShowSidebar(true);
+  };
 
   useEffect(() => () => {
     openRequestIdRef.current += 1;
@@ -1041,24 +1220,43 @@ const Chat = () => {
         {activeConvo ? (
           <>
             <div style={{ padding:16, borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:12, background: 'var(--card-bg)' }}>
-              {activeConvo.user?.photoURL ? <img src={activeConvo.user.photoURL} alt="" style={{ width:40, height:40, borderRadius:20, objectFit:'cover' }} /> : <div style={{ width:40, height:40, borderRadius:20, background:'linear-gradient(135deg,var(--primary),var(--accent))', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:600 }}>{(activeConvo.user?.name||'').split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}</div>}
-              <div>
-                <p style={{ margin:0, fontWeight:600 }}>{activeConvo.user?.name}</p>
-          <p style={{ margin:0, fontSize:12, color:'var(--text-secondary)' }}>
-            {activeConvo.isGroup ? (() => {
-              const participants = activeConvo.participants || [];
-              const usernames = participants
-                .filter(pid => pid !== user?.uid)
-                .map(pid => profilesById[pid]?.username || getCachedUser(pid)?.username)
-                .filter(Boolean);
-              if (usernames.length > 3) {
-                return usernames.slice(0, 3).join(', ') + '...';
-              } else {
-                return usernames.join(', ');
-              }
-            })() : `@${activeConvo.user?.username || ''}`}
-          </p>
-              </div>
+              <button
+                type="button"
+                aria-label="Close conversation"
+                onClick={closeActiveConversation}
+                style={{ display:'flex', alignItems:'center', justifyContent:'center', width:36, height:36, border:0, borderRadius:'50%', background:'transparent', color:'var(--text-primary)', cursor:'pointer', flexShrink:0 }}
+              >
+                <FiArrowLeft size={22} />
+              </button>
+              <button
+                type="button"
+                aria-label="View profile picture"
+                onClick={() => setShowProfilePhoto(true)}
+                style={{ padding:0, border:0, borderRadius:'50%', background:'transparent', cursor:'pointer', flexShrink:0 }}
+              >
+                <AvatarCircle src={activeConvo.user?.photoURL} alt={activeConvo.user?.name || 'Profile picture'} size={44} />
+              </button>
+              <button
+                type="button"
+                aria-label="View conversation details"
+                onClick={() => setShowConversationInfo(true)}
+                style={{ flex:1, minWidth:0, padding:0, textAlign:'left', border:0, background:'transparent', color:'inherit', cursor:'pointer' }}
+              >
+                <span style={{ display:'block', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  {activeConvo.user?.name || 'Unknown user'}
+                </span>
+                <span style={{ display:'block', marginTop:2, fontSize:12, color:'var(--text-secondary)', textAlign:'left', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  {activeConvo.isGroup ? (() => {
+                    const participants = activeConvo.participants || [];
+                    const usernames = participants
+                      .filter(pid => pid !== user?.uid)
+                      .map(pid => profilesById[pid]?.username || getCachedUser(pid)?.username)
+                      .filter(Boolean);
+                    return usernames.slice(0, 3).map(username => `@${username}`).join(', ')
+                      + (usernames.length > 3 ? '…' : '');
+                  })() : (activeConvo.user?.username ? `@${activeConvo.user.username}` : '')}
+                </span>
+              </button>
               <button onClick={(e)=>{ const rect = e.currentTarget.getBoundingClientRect(); setMenuState({ open:true, x:rect.left, y:rect.bottom+6, convoId: activeConvo.id }); }} style={{ marginLeft:'auto', background:'none', border:'none', fontSize:20, cursor:'pointer' }}><FiMoreVertical size={20} /></button>
             </div>
 
@@ -1246,6 +1444,265 @@ const Chat = () => {
               });
             })()}
           </div>
+        </div>
+      )}
+
+      {showProfilePhoto && activeConvo && (
+        <div
+          role="presentation"
+          onClick={() => setShowProfilePhoto(false)}
+          style={{ position:'fixed', inset:0, zIndex:1500, display:'flex', alignItems:'center', justifyContent:'center', padding:24, background:'rgba(0,0,0,0.78)' }}
+        >
+          <button
+            type="button"
+            aria-label="Close profile picture"
+            onClick={() => setShowProfilePhoto(false)}
+            style={{ position:'absolute', top:20, right:20, display:'flex', alignItems:'center', justifyContent:'center', width:42, height:42, border:0, borderRadius:'50%', background:'rgba(255,255,255,0.16)', color:'#fff', cursor:'pointer' }}
+          >
+            <FiX size={24} />
+          </button>
+          {activeConvo.user?.photoURL ? (
+            (() => {
+              const photoURL = activeConvo.user.photoURL;
+              const dimensions = profilePhotoDimensions?.src === photoURL ? profilePhotoDimensions : null;
+              return (
+                <img
+                  src={photoURL}
+                  alt={activeConvo.user?.name || 'Profile picture'}
+                  onClick={event => event.stopPropagation()}
+                  onLoad={event => {
+                    const { naturalWidth, naturalHeight } = event.currentTarget;
+                    setProfilePhotoDimensions({ src: photoURL, width: naturalWidth, height: naturalHeight });
+                  }}
+                  style={{
+                    display:'block',
+                    width:'auto',
+                    height:'auto',
+                    maxWidth: dimensions
+                      ? `min(calc(100vw - 48px), 960px, ${dimensions.width * 3}px)`
+                      : 'min(calc(100vw - 48px), 960px)',
+                    maxHeight: dimensions
+                      ? `min(calc(100vh - 48px), 900px, ${dimensions.height * 3}px)`
+                      : 'min(calc(100vh - 48px), 900px)',
+                    objectFit:'contain',
+                    borderRadius:20,
+                    boxShadow:'0 20px 70px rgba(0,0,0,0.4)'
+                  }}
+                />
+              );
+            })()
+          ) : (
+            <div onClick={event => event.stopPropagation()}>
+              <AvatarCircle src={null} alt={activeConvo.user?.name || 'Profile picture'} size={240} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {showConversationInfo && activeConvo && (
+        <div
+          role="presentation"
+          onClick={() => setShowConversationInfo(false)}
+          style={{ position:'fixed', inset:0, zIndex:1490, display:'flex', alignItems:'center', justifyContent:'center', padding:16, background:'rgba(0,0,0,0.52)' }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={activeConvo.isGroup ? 'Group information' : 'Contact information'}
+            onClick={event => event.stopPropagation()}
+            style={{ width:'min(100%, 440px)', maxHeight:'min(82vh, 720px)', overflowY:'auto', borderRadius:20, background:'var(--card-bg)', color:'var(--text-primary)', boxShadow:'0 20px 70px rgba(0,0,0,0.3)' }}
+          >
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px', borderBottom:'1px solid var(--border)' }}>
+              <h2 style={{ margin:0, fontSize:18 }}>{activeConvo.isGroup ? 'Group information' : 'Contact information'}</h2>
+              <button
+                type="button"
+                aria-label="Close conversation details"
+                onClick={() => setShowConversationInfo(false)}
+                style={{ display:'flex', alignItems:'center', justifyContent:'center', width:36, height:36, border:0, borderRadius:'50%', background:'transparent', color:'inherit', cursor:'pointer' }}
+              >
+                <FiX size={21} />
+              </button>
+            </div>
+
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', padding:'24px 20px 20px', textAlign:'center' }}>
+              <AvatarCircle
+                src={activeConvo.isGroup ? (groupInfo?.photoURL || activeConvo.groupPhotoURL) : activeConvo.user?.photoURL}
+                alt={activeConvo.user?.name || 'Profile picture'}
+                size={112}
+              />
+              <h3 style={{ margin:'14px 0 4px', fontSize:21 }}>{groupInfo?.name || activeConvo.user?.name || 'Unknown user'}</h3>
+              {!activeConvo.isGroup && (
+                <>
+                  {activeConvo.user?.username && <div style={{ color:'var(--text-secondary)' }}>@{activeConvo.user.username}</div>}
+                  <p style={{ margin:'12px 0 0', lineHeight:1.5, whiteSpace:'pre-wrap' }}>
+                    {activeConvo.user?.bio || 'No bio added.'}
+                  </p>
+                  {(activeConvo.user?.urls || []).filter(Boolean).map(url => (
+                    <a key={url} href={url} target="_blank" rel="noreferrer" style={{ marginTop:8, color:'var(--primary)', overflowWrap:'anywhere' }}>
+                      {url}
+                    </a>
+                  ))}
+                </>
+              )}
+              {activeConvo.isGroup && (
+                <div style={{ marginTop:6, color:'var(--text-secondary)' }}>
+                  {groupInfoLoading ? 'Loading group details…' : `${(groupInfo?.members || activeConvo.participants || []).length} members`}
+                </div>
+              )}
+            </div>
+
+            {activeConvo.isGroup && (
+              <div style={{ padding:'0 20px 20px' }}>
+                <section style={{ padding:'0 0 16px', marginBottom:18, borderBottom:'1px solid var(--border)' }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
+                    <h4 style={{ margin:0, fontSize:15 }}>Group bio</h4>
+                    {isGroupAdmin && !groupInfoEditing && (
+                      <button
+                        type="button"
+                        aria-label="Edit group bio"
+                        onClick={() => setGroupInfoEditing(true)}
+                        style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:34, height:34, border:0, borderRadius:8, background:'var(--hover-bg)', color:'inherit', cursor:'pointer' }}
+                      >
+                        <FiEdit2 size={16} />
+                      </button>
+                    )}
+                  </div>
+                  {groupInfoEditing ? (
+                    <div style={{ marginTop:12 }}>
+                      <label className="form-label">Bio</label>
+                      <textarea
+                        className="form-input"
+                        value={groupInfoDraft.bio}
+                        onChange={event => setGroupInfoDraft({ ...groupInfoDraft, bio:event.target.value })}
+                        style={{ minHeight:72, resize:'vertical' }}
+                      />
+                      <UrlFields
+                        urls={groupInfoDraft.urls}
+                        onChange={urls => setGroupInfoDraft({ ...groupInfoDraft, urls })}
+                        maxUrls={3}
+                        label="Group links"
+                      />
+                      <div style={{ display:'flex', gap:8 }}>
+                        <button type="button" className="btn-primary" onClick={saveGroupInfo} disabled={savingGroupInfo}>
+                          <FiCheck size={16} /> {savingGroupInfo ? 'Saving…' : 'Save'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setGroupInfoDraft({ bio:groupInfo?.bio || 'We are using ZeroLeak', urls:groupInfo?.urls?.length ? groupInfo.urls : [''] });
+                            setGroupInfoEditing(false);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p style={{ margin:'9px 0 0', lineHeight:1.5, whiteSpace:'pre-wrap' }}>
+                        {groupInfo?.bio || 'We are using ZeroLeak'}
+                      </p>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginTop:16 }}>
+                        <h4 style={{ margin:0, fontSize:15 }}>Links</h4>
+                        {isGroupAdmin && (
+                          <button
+                            type="button"
+                            aria-label="Edit group links"
+                            onClick={() => setGroupInfoEditing(true)}
+                            style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:34, height:34, border:0, borderRadius:8, background:'var(--hover-bg)', color:'inherit', cursor:'pointer' }}
+                          >
+                            <FiEdit2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                      {(groupInfo?.urls || []).filter(Boolean).map(url => (
+                        <a key={url} href={url} target="_blank" rel="noreferrer" style={{ display:'block', marginTop:8, color:'var(--primary)', overflowWrap:'anywhere' }}>
+                          {url}
+                        </a>
+                      ))}
+                      {!(groupInfo?.urls || []).some(Boolean) && (
+                        <p style={{ margin:'8px 0 0', color:'var(--text-secondary)', fontSize:13 }}>No links added.</p>
+                      )}
+                    </>
+                  )}
+                </section>
+                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10, fontWeight:600 }}>
+                  <FiUsers size={18} />
+                  <span>Members</span>
+                </div>
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  {(groupInfo?.members || activeConvo.participants || []).map(memberId => {
+                    const member = profilesById[memberId] || getCachedUser(memberId) || {};
+                    const admins = groupInfo?.admins?.length ? groupInfo.admins : [groupInfo?.ownerId].filter(Boolean);
+                    const memberIsAdmin = admins.includes(memberId);
+                    return (
+                      <div key={memberId} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderTop:'1px solid var(--border)' }}>
+                        <AvatarCircle src={member.photoURL} alt={member.name || 'Member'} size={40} />
+                        <div style={{ minWidth:0, flex:1, textAlign:'left' }}>
+                          <div style={{ fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                            {memberId === user?.uid ? `${member.name || 'You'} (You)` : member.name || member.username || 'Member'}
+                            {memberIsAdmin && <span style={{ marginLeft:7, fontSize:11, color:'var(--primary)' }}>Admin</span>}
+                          </div>
+                          {member.username && <div style={{ fontSize:12, color:'var(--text-secondary)' }}>@{member.username}</div>}
+                        </div>
+                        {isGroupAdmin && memberId !== groupInfo?.ownerId && (
+                          <div style={{ position:'relative' }}>
+                            <button
+                              type="button"
+                              aria-label={`Actions for ${member.name || member.username || 'member'}`}
+                              onClick={() => setMemberActionFor(memberActionFor === memberId ? null : memberId)}
+                              style={{ display:'flex', alignItems:'center', justifyContent:'center', width:34, height:34, border:0, borderRadius:8, background:'transparent', color:'inherit', cursor:'pointer' }}
+                            >
+                              <FiMoreVertical />
+                            </button>
+                            {memberActionFor === memberId && (
+                              <div style={{ position:'absolute', right:0, top:36, zIndex:2, minWidth:175, padding:6, border:'1px solid var(--border)', borderRadius:10, background:'var(--card-bg)', boxShadow:'var(--shadow-md)' }}>
+                                {isGroupOwner && (
+                                  <button type="button" className="btn-secondary" style={{ width:'100%', marginBottom:4 }} onClick={() => handleGroupMemberAction(memberIsAdmin ? 'demote' : 'promote', memberId)}>
+                                    {memberIsAdmin ? 'Remove admin' : 'Make admin'}
+                                  </button>
+                                )}
+                                {memberIsAdmin && !isGroupOwner && (
+                                  <div style={{ padding:'7px 8px', fontSize:12, color:'var(--text-secondary)' }}>Admins cannot manage other admins.</div>
+                                )}
+                                {!memberIsAdmin && (
+                                  <>
+                                    <button type="button" className="btn-secondary" style={{ width:'100%', marginBottom:4 }} onClick={() => handleGroupMemberAction('remove', memberId)}>Remove member</button>
+                                    <button type="button" className="btn-secondary" style={{ width:'100%' }} onClick={() => handleGroupMemberAction('block', memberId)}>Block member</button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {(groupInfo?.blockedMembers || []).length > 0 && (
+                  <section style={{ marginTop:20 }}>
+                    <h4 style={{ margin:'0 0 8px', fontSize:14 }}>Blocked members</h4>
+                    {groupInfo.blockedMembers.map(memberId => {
+                      const member = profilesById[memberId] || getCachedUser(memberId) || {};
+                      return (
+                        <div key={memberId} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderTop:'1px solid var(--border)' }}>
+                          <AvatarCircle src={member.photoURL} alt={member.name || 'Blocked member'} size={36} />
+                          <div style={{ flex:1, minWidth:0, textAlign:'left' }}>
+                            <div style={{ fontWeight:600 }}>{member.name || member.username || 'Blocked member'}</div>
+                            {member.username && <div style={{ fontSize:12, color:'var(--text-secondary)' }}>@{member.username}</div>}
+                          </div>
+                          {isGroupAdmin && (
+                            <button type="button" className="btn-secondary" onClick={() => handleGroupMemberAction('unblock', memberId)}>Unblock</button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </section>
+                )}
+              </div>
+            )}
+          </section>
         </div>
       )}
     </div>
