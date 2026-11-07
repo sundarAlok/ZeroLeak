@@ -11,9 +11,11 @@ service cloud.firestore {
       allow create, update: if request.auth != null
                             && request.auth.uid == userId
                             && request.resource.data.keys().hasOnly([
-                              'uid', 'name', 'username', 'bio', 'photoURL'
+                              'uid', 'name', 'username', 'bio', 'photoURL', 'urls'
                             ])
-                            && request.resource.data.uid == userId;
+                            && request.resource.data.uid == userId
+                            && request.resource.data.urls is list
+                            && request.resource.data.urls.size() <= 3;
       allow delete: if false;
     }
 
@@ -21,11 +23,37 @@ service cloud.firestore {
       allow create: if request.auth != null
                     && request.resource.data.participants is list
                     && request.auth.uid in request.resource.data.participants;
-      allow read, delete: if request.auth != null
-                           && request.auth.uid in resource.data.participants;
+      allow get: if request.auth != null
+                 && (
+                   !exists(/databases/$(database)/documents/conversations/$(conversationId))
+                   || request.auth.uid in resource.data.participants
+                 );
+      allow list, delete: if request.auth != null
+                          && request.auth.uid in resource.data.participants;
       allow update: if request.auth != null
                     && request.auth.uid in resource.data.participants
-                    && request.resource.data.participants == resource.data.participants;
+                    && (
+                      request.resource.data.participants == resource.data.participants
+                      || (
+                        resource.data.isGroup == true
+                        && request.resource.data.isGroup == true
+                        && request.resource.data.groupId == resource.data.groupId
+                        && request.auth.uid in get(
+                          /databases/$(database)/documents/groups/$(resource.data.groupId)
+                        ).data.members
+                        && (
+                          request.auth.uid in get(
+                            /databases/$(database)/documents/groups/$(resource.data.groupId)
+                          ).data.admins
+                          || request.auth.uid == get(
+                            /databases/$(database)/documents/groups/$(resource.data.groupId)
+                          ).data.ownerId
+                        )
+                        && request.resource.data.participants == getAfter(
+                          /databases/$(database)/documents/groups/$(resource.data.groupId)
+                        ).data.members
+                      )
+                    );
 
       match /messages/{messageId} {
         function isParticipant() {
@@ -35,9 +63,43 @@ service cloud.firestore {
                  && request.auth.uid in convo.data.participants;
         }
 
+        function isValidMembershipEvent() {
+          let convo = get(/databases/$(database)/documents/conversations/$(conversationId));
+          let groupPath = /databases/$(database)/documents/groups/$(convo.data.groupId);
+          let group = get(groupPath);
+          let groupAfter = getAfter(groupPath);
+          let targetId = request.resource.data.targetUserId;
+          let action = request.resource.data.membershipAction;
+          return convo.data.isGroup == true
+                 && convo.data.groupId is string
+                 && group != null
+                 && groupAfter != null
+                 && (
+                   request.auth.uid == group.data.ownerId
+                   || request.auth.uid in group.data.admins
+                 )
+                 && request.resource.data.systemType == 'membership'
+                 && action in ['added', 'removed']
+                 && targetId is string
+                 && (
+                   (action == 'added'
+                    && !(targetId in group.data.members)
+                    && targetId in groupAfter.data.members)
+                   || (action == 'removed'
+                       && targetId in group.data.members
+                       && !(targetId in groupAfter.data.members))
+                 )
+                 && getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+                    == groupAfter.data.members;
+        }
+
         allow create: if request.auth != null
                       && request.resource.data.senderId == request.auth.uid
-                      && isParticipant();
+                      && isParticipant()
+                      && (
+                        !('systemType' in request.resource.data)
+                        || isValidMembershipEvent()
+                      );
         allow read: if request.auth != null && isParticipant();
         allow update: if request.auth != null
                       && isParticipant()
@@ -74,17 +136,46 @@ service cloud.firestore {
         return group != null && request.auth.uid in group.data.members;
       }
 
+      function isAdmin() {
+        let group = get(/databases/$(database)/documents/groups/$(groupId));
+        return group != null
+               && (
+                 request.auth.uid == group.data.ownerId
+                 || request.auth.uid in group.data.admins
+               );
+      }
+
       allow read: if request.auth != null && groupExists() && isMember();
       allow create: if request.auth != null
                     && request.resource.data.ownerId == request.auth.uid
                     && request.resource.data.members is list
-                    && request.auth.uid in request.resource.data.members;
+                    && request.auth.uid in request.resource.data.members
+                    && request.resource.data.admins == [request.auth.uid]
+                    && request.resource.data.blockedMembers is list
+                    && request.resource.data.blockedMembers.size() == 0
+                    && request.resource.data.bio is string
+                    && request.resource.data.urls is list
+                    && request.resource.data.urls.size() <= 3;
       allow update: if request.auth != null
-                    && isMember()
-                    && !('ownerId' in request.resource.data
-                         && request.resource.data.ownerId != resource.data.ownerId)
-                    && !('members' in request.resource.data
-                         && request.resource.data.members != resource.data.members);
+                    && isAdmin()
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && request.resource.data.members is list
+                    && request.resource.data.admins is list
+                    && request.resource.data.blockedMembers is list
+                    && request.resource.data.members.hasAll(request.resource.data.admins)
+                    && request.resource.data.members.hasAll([resource.data.ownerId])
+                    && !request.resource.data.members.hasAny(request.resource.data.blockedMembers)
+                    && request.resource.data.bio is string
+                    && request.resource.data.urls is list
+                    && request.resource.data.urls.size() <= 3
+                    && request.resource.data.keys().hasOnly([
+                      'name', 'photoURL', 'ownerId', 'members', 'admins',
+                      'blockedMembers', 'bio', 'urls', 'createdAt'
+                    ])
+                    && (
+                      request.auth.uid == resource.data.ownerId
+                      || request.resource.data.admins == resource.data.admins
+                    );
       allow delete: if request.auth != null
                     && groupExists()
                     && request.auth.uid == resource.data.ownerId;

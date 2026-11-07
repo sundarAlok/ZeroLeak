@@ -10,6 +10,7 @@ import { MdLogout } from "react-icons/md";
 import { LiaEdit } from "react-icons/lia";
 import { BsSave2 } from "react-icons/bs";
 import AvatarCircle from '../../components/common/AvatarCircle';
+import UrlFields from '../../components/common/UrlFields';
 
 const Profile = () => {
   const { user, signOut } = useAuth();
@@ -81,16 +82,20 @@ const Profile = () => {
     if (!editData.name || !editData.bio) { setError('Name and bio are required'); return; }
     try {
       setSaving(true);
-      const updatedProfile = { ...profile, ...editData };
+      const urls = (editData.urls || []).map(url => url.trim()).filter(Boolean).slice(0, 3);
+      const updatedProfile = { ...profile, ...editData, urls };
       const batch = writeBatch(db);
       batch.update(doc(db, 'users', user.uid), {
         name: editData.name,
         bio: editData.bio,
-        photoURL: editData.photoURL || null
+        photoURL: editData.photoURL || null,
+        urls
       });
       batch.set(doc(db, 'publicProfiles', user.uid), getPublicProfile(user.uid, updatedProfile));
       await batch.commit();
-      setProfile(editData);
+      setProfile(updatedProfile);
+      setEditData(updatedProfile);
+      cacheUserProfile(user.uid, updatedProfile);
       setIsEditing(false);
       setSuccess('Profile updated successfully!');
       setTimeout(()=>setSuccess(''), 3000);
@@ -124,6 +129,11 @@ const Profile = () => {
 
           {!isEditing && <>
             <p style={{ fontSize:14, color:'var(--text-primary)', margin:'12px 0 0 0', lineHeight:1.5 }}>{profile.bio || 'Hey there — I am using ZeroLeak!'}</p>
+            {(profile.urls || []).filter(Boolean).map(url => (
+              <a key={url} href={url} target="_blank" rel="noreferrer" style={{ display:'block', marginTop:8, color:'var(--primary)', overflowWrap:'anywhere' }}>
+                {url}
+              </a>
+            ))}
             <div style={{ display:'flex', gap:8, marginTop:20 }}>
               <button 
                 onClick={()=>setIsEditing(true)} 
@@ -160,6 +170,7 @@ const Profile = () => {
                 <label className="form-label">Photo URL</label>
                 <input className="form-input" type="url" value={editData.photoURL||''} onChange={(e)=>setEditData({...editData, photoURL: e.target.value})} />
               </div>
+              <UrlFields urls={editData.urls || ['']} onChange={urls => setEditData({ ...editData, urls })} maxUrls={3} label="Profile links" />
 
               <div style={{ display:'flex', gap:8 }}>
                 <button className="btn-primary" type="submit" disabled={saving} style={{ flex:1 }}>{saving ? 'Saving...' : <> <BsSave2 size={20} /> Save Changes </>}</button>
