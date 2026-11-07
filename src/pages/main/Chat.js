@@ -17,7 +17,7 @@ import { LuSendHorizontal } from "react-icons/lu";
 import { getOrCreateDirectConversation } from '../../firebase/conversations';
 import AvatarCircle from '../../components/common/AvatarCircle';
 import UrlFields from '../../components/common/UrlFields';
-import VideoMessage from '../../components/common/VideoMessage';
+import VideoMessage, { hasEmbeddableVideo } from '../../components/common/VideoMessage';
 
 const Chat = () => {
   const { user } = useAuth();
@@ -1511,7 +1511,7 @@ const Chat = () => {
                       }
 
                       return (
-                        <div key={msg.id || idx} className={`message ${isOwn ? 'own' : 'other'}`} style={{ marginBottom: 8 }}>
+                        <div key={msg.id || idx} className={`message ${isOwn ? 'own' : 'other'}${hasEmbeddableVideo(msg.text) ? ' has-video' : ''}`} style={{ marginBottom: 8 }}>
                           <div className="msg">
                             {/* Header: name (left) + username (right) - only for received messages */}
                             {!isOwn && (

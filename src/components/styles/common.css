@@ -350,8 +350,9 @@ body {
 /* WhatsApp-style message container */
 .msg {
   max-width: 340px;
+  box-sizing: border-box;
   background: var(--msg-in-bg);
-  padding: 8px 10px 0 10px;
+  padding: 8px 10px 7px;
   border-radius: 6px;
   position: relative;
   color: var(--msg-in-text);
@@ -365,12 +366,18 @@ body {
   border-bottom-left-radius: 6px;
 }
 
+.message.has-video .msg {
+  max-width: 400px;
+}
+
 /* Top row: name (left) + username (right) */
 .msg-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
+  align-items: baseline;
+  flex-wrap: wrap;
   margin-bottom: 2px;
-  gap: 10px;
+  gap: 6px;
   /* background-color: red; */
 }
 
@@ -385,6 +392,8 @@ body {
   font-size: 10px;
   color: var(--msg-in-text);
   opacity: 0.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .message.own .msg-header .name,
@@ -395,9 +404,9 @@ body {
 
 /* Middle message bubble */
 .msg-body {
-  padding: 2px 30px 0 0;
-  margin: 0 30px 0 0;
-  font-size: 14px;
+  padding: 2px 0 0;
+  margin: 0;
+  font-size: 15px;
   line-height: 1.2em;
   position: relative;
   word-wrap: break-word;
@@ -409,20 +418,27 @@ body {
   color: var(--msg-out-text);
 }
 
+.message.own .msg-body a,
+.message.own .msg-body a:visited,
+.message.own .msg-body a:hover,
+.message.own .msg-body a:active {
+  color: #fff;
+}
+
 /* Footer (time + ticks) */
 .msg-footer {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   padding: 0;
-  margin-top: 0px;
+  min-height: 12px;
+  margin-top: 4px;
 }
 
 .msg-footer .time {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--msg-in-text);
   opacity: 0.6;
-  position: relative;
-  top: -12px;
   padding: 0;
 }
 
@@ -433,10 +449,8 @@ body {
 
 .tick {
   margin-left: 4px;
-  font-size: 9px;
+  font-size: 10px;
   color: #00d4aa;
-  position: relative;
-  top: -12px;
   padding: 0;
 }
 
